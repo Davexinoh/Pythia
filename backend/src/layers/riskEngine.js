@@ -1,6 +1,6 @@
 const MAX_POSITION_SIZE = 0.15
-const MAX_CLUSTER_EXPOSURE = 0.25
-const MAX_OPEN_POSITIONS = 3
+const MAX_CLUSTER_EXPOSURE = 0.40
+const MAX_OPEN_POSITIONS = 5
 const KELLY_FRACTION = 0.5
 
 function kellyBetSize(adjustedEdge, impliedProbability, portfolioValue) {
@@ -25,13 +25,20 @@ function kellyBetSize(adjustedEdge, impliedProbability, portfolioValue) {
 function getClusterKey(market) {
   const question = (market.question || '').toLowerCase()
 
-  if (question.includes('gta')) return 'gta_vi'
+  if (question.includes('btc') || question.includes('bitcoin')) return 'bitcoin'
+  if (question.includes('eth') || question.includes('ethereum')) return 'ethereum'
+  if (question.includes('sol') || question.includes('solana')) return 'solana'
   if (question.includes('trump')) return 'trump'
-  if (question.includes('bitcoin') || question.includes('btc')) return 'bitcoin'
-  if (question.includes('fed') || question.includes('rate')) return 'macro_rates'
   if (question.includes('election')) return 'election'
+  if (question.includes('fed') || question.includes('rate')) return 'macro_rates'
+  if (question.includes('nba')) return 'nba'
+  if (question.includes('nfl')) return 'nfl'
+  if (question.includes('nhl')) return 'nhl'
+  if (question.includes('fifa') || question.includes('world cup')) return 'fifa'
+  if (question.includes('gta')) return 'gta_vi'
 
-  return market.category || 'general'
+  // Use category as fallback — much more specific than 'unknown'
+  return market.category?.toLowerCase().replace(' ', '_') || 'general'
 }
 
 function checkRisk(market, edgeResult, openPositions, portfolioValue) {
@@ -46,13 +53,9 @@ function checkRisk(market, edgeResult, openPositions, portfolioValue) {
     checks.push({ check: 'POSITION_COUNT', passed: true, reason: openPositions.length + '/' + MAX_OPEN_POSITIONS + ' positions open' })
   }
 
-  // Check 2 — kelly sizing with cap
+  // Check 2 — kelly sizing
   const kelly = kellyBetSize(edgeResult.adjusted_edge, edgeResult.implied_probability, portfolioValue)
-  if (kelly.capped_fraction >= MAX_POSITION_SIZE) {
-    checks.push({ check: 'MARKET_CAP', passed: true, reason: 'Capped at ' + (MAX_POSITION_SIZE * 100) + '% max' })
-  } else {
-    checks.push({ check: 'MARKET_CAP', passed: true, reason: 'Size ' + (kelly.capped_fraction * 100).toFixed(1) + '% within limit' })
-  }
+  checks.push({ check: 'MARKET_CAP', passed: true, reason: 'Size ' + (kelly.capped_fraction * 100).toFixed(1) + '% within ' + (MAX_POSITION_SIZE * 100) + '% limit' })
 
   // Check 3 — cluster exposure
   const clusterKey = getClusterKey(market)
