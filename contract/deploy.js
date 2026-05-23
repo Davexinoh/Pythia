@@ -3,7 +3,7 @@ const { ethers } = require('ethers')
 const fs = require('fs')
 
 // Arc testnet RPC
-const ARC_TESTNET_RPC = 'https://rpc.arc.testnet.circle.com'
+const ARC_TESTNET_RPC = 'https://rpc.testnet.arc.network'
 const PRIVATE_KEY = process.env.DEPLOYER_PRIVATE_KEY
 
 async function deploy() {
@@ -19,7 +19,7 @@ async function deploy() {
   console.log('[deploy] Deployer address:', wallet.address)
 
   const balance = await provider.getBalance(wallet.address)
-  console.log('[deploy] Balance:', ethers.formatEther(balance), 'ETH')
+  console.log('[deploy] Balance:', ethers.formatEthe(balance), 'USDC')
 
   if (balance === 0n) {
     console.error('[deploy] No balance — fund this address on Arc testnet faucet first')

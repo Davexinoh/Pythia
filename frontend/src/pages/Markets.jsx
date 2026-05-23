@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { getMarkets } from '../api'
+import { getMarkets } from '../api.js'
 
 const STATUS_COLOR = {
   execute: 'var(--green)',

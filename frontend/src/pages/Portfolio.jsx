@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { getStats, getTraces } from '../api'
+import { getStats, getTraces } from '../api.js'
 
 function StatCard({ label, value, sub, color, delay }) {
   return (

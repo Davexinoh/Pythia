@@ -1,14 +1,16 @@
 import { Routes, Route, NavLink, useNavigate } from 'react-router-dom'
 import { useState, useEffect } from 'react'
+import { WalletProvider, useWallet } from './context/WalletContext'
 import Markets from './pages/Markets'
 import TraceLog from './pages/TraceLog'
 import Portfolio from './pages/Portfolio'
-import { getStats, runAgent } from './api'
+import Landing from './pages/Landing'
+import { getStats, runAgent, getWalletData } from './api.js'
 
-export default function App() {
+function Dashboard() {
+  const { wallet, disconnect, updateBalance } = useWallet()
   const [stats, setStats] = useState(null)
   const [running, setRunning] = useState(false)
-  const [sidebarOpen, setSidebarOpen] = useState(false)
   const navigate = useNavigate()
 
   useEffect(() => {
@@ -27,8 +29,13 @@ export default function App() {
   async function handleRun() {
     setRunning(true)
     try {
-      await runAgent()
+      await runAgent(wallet?.address)
       await fetchStats()
+      // Refresh wallet balance
+      if (wallet?.address) {
+        const data = await getWalletData(wallet.address)
+        if (data.onchain) updateBalance(data.onchain.virtualBalance)
+      }
       navigate('/traces')
     } catch (err) {
       console.error('Run failed:', err)
@@ -54,14 +61,6 @@ export default function App() {
         pointerEvents: 'none', zIndex: 0
       }} />
 
-      {/* Mobile overlay */}
-      {sidebarOpen && (
-        <div onClick={() => setSidebarOpen(false)} style={{
-          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)',
-          zIndex: 10, display: 'none'
-        }} className="mobile-overlay" />
-      )}
-
       {/* Sidebar */}
       <aside style={{
         width: 220, background: 'var(--bg2)',
@@ -69,6 +68,7 @@ export default function App() {
         display: 'flex', flexDirection: 'column',
         padding: '28px 0', flexShrink: 0, position: 'relative', zIndex: 2
       }}>
+
         {/* Logo */}
         <div style={{ padding: '0 24px 28px', borderBottom: '1px solid var(--border)', marginBottom: 20 }}>
           <div style={{ fontSize: 22, fontWeight: 800, letterSpacing: '-0.5px', color: '#fff' }}>
@@ -105,6 +105,39 @@ export default function App() {
 
         {/* Bottom */}
         <div style={{ marginTop: 'auto', padding: '0 12px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+
+          {/* Wallet info */}
+          {wallet && (
+            <div style={{
+              padding: '12px', background: 'rgba(255,255,255,0.02)',
+              border: '1px solid var(--border)', borderRadius: 8
+            }}>
+              <div style={{
+                fontFamily: 'JetBrains Mono, monospace', fontSize: 9,
+                color: 'var(--text-muted)', letterSpacing: 1,
+                textTransform: 'uppercase', marginBottom: 8
+              }}>Your Wallet</div>
+              <div style={{
+                fontFamily: 'JetBrains Mono, monospace', fontSize: 11,
+                color: 'var(--text)', marginBottom: 4,
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'
+              }}>
+                {wallet.email}
+              </div>
+              <div style={{
+                fontSize: 18, fontWeight: 800, color: 'var(--green)',
+                letterSpacing: -0.5
+              }}>
+                ${wallet.virtualBalance?.toFixed(2)}
+              </div>
+              <div style={{
+                fontFamily: 'JetBrains Mono, monospace', fontSize: 9,
+                color: 'var(--text-dim)', marginTop: 2
+              }}>virtual USDC</div>
+            </div>
+          )}
+
+          {/* Stats */}
           {stats && (
             <div style={{
               padding: '10px 12px', background: 'rgba(255,255,255,0.02)',
@@ -117,6 +150,22 @@ export default function App() {
               <div>total <span style={{ color: 'var(--text)', float: 'right' }}>{stats.total}</span></div>
             </div>
           )}
+
+          {/* Disconnect */}
+          <button onClick={disconnect} style={{
+            padding: '8px 12px', background: 'transparent',
+            border: '1px solid var(--border)', borderRadius: 8,
+            color: 'var(--text-muted)', fontFamily: 'JetBrains Mono, monospace',
+            fontSize: 10, cursor: 'pointer', textAlign: 'left',
+            transition: 'all 0.15s'
+          }}
+            onMouseEnter={e => { e.target.style.color = 'var(--red)'; e.target.style.borderColor = 'rgba(248,113,113,0.3)' }}
+            onMouseLeave={e => { e.target.style.color = 'var(--text-muted)'; e.target.style.borderColor = 'var(--border)' }}
+          >
+            ⊗ Disconnect
+          </button>
+
+          {/* Arc testnet badge */}
           <div style={{
             display: 'flex', alignItems: 'center', gap: 8,
             padding: '10px 12px', background: 'var(--green-glow)',
@@ -124,7 +173,7 @@ export default function App() {
             fontFamily: 'JetBrains Mono, monospace', fontSize: 10, color: 'var(--green)'
           }}>
             <div style={{ width: 6, height: 6, background: 'var(--green)', borderRadius: '50%', animation: 'pulse 2s infinite' }} />
-            SIMULATION · ON
+            ARC TESTNET
           </div>
         </div>
       </aside>
@@ -142,16 +191,18 @@ export default function App() {
           <div>
             <div style={{ fontSize: 14, fontWeight: 700 }}>Pythia Agent</div>
             <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>
-              Prediction Market Oracle · Arc / USDC
+              {wallet ? `${wallet.address?.slice(0, 6)}...${wallet.address?.slice(-4)}` : 'Prediction Market Oracle'} · Circle Wallets · Arc
             </div>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <span style={{
-              padding: '4px 10px', background: 'var(--purple-glow)',
-              border: '1px solid rgba(167,139,250,0.15)', borderRadius: 6,
-              fontFamily: 'JetBrains Mono, monospace', fontSize: 9,
-              color: 'var(--purple)', letterSpacing: 1
-            }}>◆ SIMULATION</span>
+            {wallet?.isNew && (
+              <span style={{
+                padding: '4px 10px', background: 'var(--green-glow)',
+                border: '1px solid rgba(52,211,153,0.2)', borderRadius: 6,
+                fontFamily: 'JetBrains Mono, monospace', fontSize: 9,
+                color: 'var(--green)', letterSpacing: 1
+              }}>✦ NEW · $1,000 USDC</span>
+            )}
             <button onClick={handleRun} disabled={running} style={{
               padding: '8px 18px', borderRadius: 8, border: 'none',
               background: running ? 'var(--text-dim)' : 'var(--cyan)',
@@ -175,5 +226,28 @@ export default function App() {
         </div>
       </main>
     </div>
+  )
+}
+
+function AppContent() {
+  const { wallet } = useWallet()
+  const [connected, setConnected] = useState(false)
+
+  useEffect(() => {
+    if (wallet) setConnected(true)
+  }, [wallet])
+
+  if (!connected && !wallet) {
+    return <Landing onConnected={() => setConnected(true)} />
+  }
+
+  return <Dashboard />
+}
+
+export default function App() {
+  return (
+    <WalletProvider>
+      <AppContent />
+    </WalletProvider>
   )
 }
