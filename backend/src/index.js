@@ -17,12 +17,11 @@ const PORT = process.env.PORT || 3001
 app.use(cors({ origin: process.env.FRONTEND_URL || 'http://localhost:5173' }))
 app.use(express.json())
 
-// Portfolio value per wallet address
 const walletPortfolios = {}
 const openPositions = {}
 
 function getPortfolioValue(address) {
-  return walletPortfolios[address] || 1000
+  return walletPortfolios[address] !== undefined ? walletPortfolios[address] : 1000
 }
 
 function getOpenPositions(address) {
@@ -42,10 +41,11 @@ app.post('/api/wallet/connect', async (req, res) => {
 
     const wallet = await connectWallet(email)
 
-    // Sync portfolio value from onchain balance
-    walletPortfolios[wallet.address] = wallet.virtualBalance
+    if (walletPortfolios[wallet.address] === undefined) {
+      walletPortfolios[wallet.address] = wallet.virtualBalance
+    }
 
-    res.json({ wallet })
+    res.json({ wallet: { ...wallet, virtualBalance: walletPortfolios[wallet.address] } })
   } catch (err) {
     console.error('[/api/wallet/connect]', err.message)
     res.status(500).json({ error: err.message })
@@ -57,11 +57,22 @@ app.get('/api/wallet/:address', async (req, res) => {
   try {
     const { address } = req.params
     const onchain = await getOnchainData(address)
-    if (!onchain) return res.status(404).json({ error: 'Wallet not found' })
-    res.json({ onchain, portfolioValue: getPortfolioValue(address) })
+    const virtualBalance = walletPortfolios[address] !== undefined
+      ? walletPortfolios[address]
+      : onchain?.virtualBalance || 1000
+    res.json({ onchain, virtualBalance })
   } catch (err) {
     res.status(500).json({ error: err.message })
   }
+})
+
+// GET /api/wallet/:address/balance
+app.get('/api/wallet/:address/balance', (req, res) => {
+  const { address } = req.params
+  const virtualBalance = walletPortfolios[address] !== undefined
+    ? walletPortfolios[address]
+    : 1000
+  res.json({ address, virtualBalance })
 })
 
 // GET /api/markets
@@ -105,7 +116,7 @@ app.post('/api/run', async (req, res) => {
         const rec = await skipOrder(market, 'NO_ARTICLES', null, null)
         rec.wallet_address = address
         logTrace(rec, [], { score: 0, signal_count: 0 }, null, null)
-        if (address) await recordSkip(address, 'NO_ARTICLES')
+        if (address) await recordSkip(address, 'NO_ARTICLES').catch(() => {})
         results.push({ market_id: market.market_id, status: 'SKIPPED', reason: 'NO_ARTICLES' })
         continue
       }
@@ -118,7 +129,7 @@ app.post('/api/run', async (req, res) => {
         const rec = await skipOrder(market, edgeResult.reason, scoreResult, edgeResult)
         rec.wallet_address = address
         logTrace(rec, signals, scoreResult, edgeResult, null)
-        if (address) await recordSkip(address, edgeResult.reason)
+        if (address) await recordSkip(address, edgeResult.reason).catch(() => {})
         results.push({ market_id: market.market_id, status: 'SKIPPED', reason: edgeResult.reason })
         continue
       }
@@ -129,7 +140,7 @@ app.post('/api/run', async (req, res) => {
         const rec = await skipOrder(market, riskResult.reason, scoreResult, edgeResult)
         rec.wallet_address = address
         logTrace(rec, signals, scoreResult, edgeResult, riskResult)
-        if (address) await recordSkip(address, riskResult.reason)
+        if (address) await recordSkip(address, riskResult.reason).catch(() => {})
         results.push({ market_id: market.market_id, status: 'SKIPPED', reason: riskResult.reason })
         continue
       }
@@ -138,10 +149,11 @@ app.post('/api/run', async (req, res) => {
       rec.wallet_address = address
       logTrace(rec, signals, scoreResult, edgeResult, riskResult)
 
-      // Record onchain
+      // Deduct from virtual balance
       if (address) {
-        await recordExecution(address, riskResult.kelly.bet_size_usdc, riskResult.direction)
-        walletPortfolios[address] = (walletPortfolios[address] || 1000) - riskResult.kelly.bet_size_usdc
+        const current = walletPortfolios[address] !== undefined ? walletPortfolios[address] : 1000
+        walletPortfolios[address] = Math.max(0, current - riskResult.kelly.bet_size_usdc)
+        await recordExecution(address, riskResult.kelly.bet_size_usdc, riskResult.direction).catch(() => {})
       }
 
       positions.push({
