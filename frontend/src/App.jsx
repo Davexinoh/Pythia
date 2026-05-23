@@ -56,19 +56,33 @@ function Dashboard() {
   const navigate = useNavigate()
 
   async function handleRun() {
-    setRunning(true)
-    try {
-      await runAgent(wallet?.address)
-      if (wallet?.address) {
-        const data = await getWalletData(wallet.address)
-        if (data.onchain) updateBalance(data.onchain.virtualBalance)
+  setRunning(true)
+  try {
+    await runAgent(wallet?.address)
+    // Poll for completion
+    const poll = setInterval(async () => {
+      try {
+        const res = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:3001'}/api/run/status?address=${wallet?.address}`)
+        const data = await res.json()
+        if (!data.running) {
+          clearInterval(poll)
+          setRunning(false)
+          if (wallet?.address) {
+            const balRes = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:3001'}/api/wallet/${wallet.address}/balance`)
+            const balData = await balRes.json()
+            updateBalance(balData.virtualBalance)
+          }
+          navigate('/traces')
+        }
+      } catch {
+        clearInterval(poll)
+        setRunning(false)
       }
-      navigate('/traces')
-    } catch (err) {
-      console.error('Run failed:', err)
-    } finally {
-      setRunning(false)
-    }
+    }, 3000)
+  } catch (err) {
+    console.error('Run failed:', err)
+    setRunning(false)
+  }
   }
 
   return (
