@@ -8,13 +8,17 @@ export function WalletProvider({ children }) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
 
-  // Persist wallet across page refreshes
   useEffect(() => {
-    const saved = localStorage.getItem('pythia_wallet')
-    if (saved) {
-      try {
-        setWallet(JSON.parse(saved))
-      } catch {}
+    try {
+      const saved = localStorage.getItem('pythia_wallet')
+      if (saved) {
+        const parsed = JSON.parse(saved)
+        if (parsed && parsed.address) {
+          setWallet(parsed)
+        }
+      }
+    } catch {
+      localStorage.removeItem('pythia_wallet')
     }
   }, [])
 
@@ -23,11 +27,13 @@ export function WalletProvider({ children }) {
     setError(null)
     try {
       const data = await connectWalletAPI(email)
-      setWallet(data.wallet)
-      localStorage.setItem('pythia_wallet', JSON.stringify(data.wallet))
-      return data.wallet
+      const w = data.wallet
+      setWallet(w)
+      localStorage.setItem('pythia_wallet', JSON.stringify(w))
+      return w
     } catch (err) {
-      setError(err.response?.data?.error || 'Connection failed')
+      const msg = err.response?.data?.error || 'Connection failed. Try again.'
+      setError(msg)
       throw err
     } finally {
       setLoading(false)
@@ -37,6 +43,7 @@ export function WalletProvider({ children }) {
   function disconnect() {
     setWallet(null)
     localStorage.removeItem('pythia_wallet')
+    window.location.href = '/'
   }
 
   function updateBalance(newBalance) {
