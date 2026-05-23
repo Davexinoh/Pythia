@@ -1,302 +1,237 @@
 import { useState, useEffect } from 'react'
 import { getMarkets } from '../api.js'
+import { useWallet } from '../context/WalletContext'
 
-const STATUS_COLOR = {
-  execute: 'var(--green)',
-  skip: 'var(--amber)',
-  watching: 'var(--text-dim)'
-}
+const CATEGORIES = ['All', 'Bitcoin', 'Ethereum', 'Solana', 'Crypto', 'Politics', 'Sports', 'Macro', 'Pop Culture']
 
-function ProbBar({ market, model }) {
-  return (
-    <div style={{ margin: '12px 0' }}>
-      <div style={{
-        display: 'flex', justifyContent: 'space-between',
-        fontFamily: 'JetBrains Mono, monospace', fontSize: 10,
-        marginBottom: 8
-      }}>
-        <span style={{ color: 'var(--text-muted)' }}>Probability</span>
-        <span>
-          <span style={{ color: 'var(--text-muted)' }}>MKT {(market * 100).toFixed(1)}%</span>
-          <span style={{ color: 'var(--text-dim)' }}> → </span>
-          <span style={{ color: model ? 'var(--cyan)' : 'var(--text-dim)', fontWeight: 600 }}>
-            {model ? `MODEL ${(model * 100).toFixed(1)}%` : 'PENDING'}
-          </span>
-        </span>
-      </div>
-      <div style={{
-        height: 6, background: 'rgba(255,255,255,0.05)',
-        borderRadius: 3, position: 'relative'
-      }}>
-        {/* Market marker */}
-        <div style={{
-          position: 'absolute', top: -4, left: `${market * 100}%`,
-          width: 14, height: 14, borderRadius: '50%',
-          background: 'var(--text-dim)',
-          border: '2px solid var(--bg2)',
-          transform: 'translateX(-50%)',
-          transition: 'left 0.5s ease'
-        }} />
-        {/* Model marker */}
-        {model && (
-          <div style={{
-            position: 'absolute', top: -4, left: `${model * 100}%`,
-            width: 14, height: 14, borderRadius: '50%',
-            background: 'var(--cyan)',
-            border: '2px solid var(--bg2)',
-            transform: 'translateX(-50%)',
-            boxShadow: '0 0 10px rgba(99,179,237,0.5)',
-            transition: 'left 0.5s ease'
-          }} />
-        )}
-      </div>
-    </div>
-  )
-}
-
-function MarketCard({ market, index, selected, onClick }) {
-  const hasEdge = market.model_probability !== null && market.model_probability !== undefined
+function MarketCard({ market, index, onSelect, selected }) {
+  const hasEdge = market.model_probability != null
   const edge = hasEdge ? market.model_probability - market.implied_probability : null
-  const status = !hasEdge ? 'watching' : Math.abs(edge) >= 0.06 ? 'execute' : 'skip'
-  const accentColor = STATUS_COLOR[status]
+  const isExecute = hasEdge && Math.abs(edge) >= 0.06
+
+  const yesProb = Math.round(market.implied_probability * 100)
+  const noProb = 100 - yesProb
+  const modelProb = hasEdge ? Math.round(market.model_probability * 100) : null
 
   return (
     <div
-      onClick={() => onClick(market)}
+      onClick={() => onSelect(market)}
       className={`fade-up-${Math.min(index + 1, 4)}`}
       style={{
         background: selected ? 'var(--bg3)' : 'var(--bg2)',
-        border: `1px solid ${selected ? 'var(--border-accent)' : 'var(--border)'}`,
-        borderRadius: 12, padding: '16px 18px',
+        borderRadius: 16, padding: '16px',
         marginBottom: 8, cursor: 'pointer',
-        transition: 'all 0.2s',
-        position: 'relative', overflow: 'hidden',
-        boxShadow: selected && status === 'execute'
-          ? 'inset 0 0 30px var(--green-glow)'
-          : 'none'
+        border: `1px solid ${selected ? 'var(--blue)' : 'var(--border)'}`,
+        transition: 'all 0.15s'
       }}
     >
-      {/* Left accent bar */}
-      <div style={{
-        position: 'absolute', left: 0, top: 0, bottom: 0,
-        width: 3, background: accentColor, borderRadius: '12px 0 0 12px'
-      }} />
-
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10 }}>
-        <div style={{ fontSize: 13, fontWeight: 600, lineHeight: 1.4, flex: 1 }}>
-          {market.question}
-        </div>
+      {/* Top row */}
+      <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', marginBottom: 12 }}>
         <div style={{
-          padding: '3px 10px', borderRadius: 20, flexShrink: 0,
-          fontFamily: 'JetBrains Mono, monospace', fontSize: 10, fontWeight: 600,
-          background: status === 'execute' ? 'var(--green-glow)'
-            : status === 'skip' ? 'var(--amber-glow)'
-            : 'rgba(255,255,255,0.03)',
-          color: accentColor,
-          border: `1px solid ${status === 'execute' ? 'rgba(52,211,153,0.2)'
-            : status === 'skip' ? 'rgba(251,191,36,0.2)'
-            : 'var(--border)'}`
+          width: 40, height: 40, borderRadius: 10,
+          background: 'var(--bg3)', display: 'flex',
+          alignItems: 'center', justifyContent: 'center',
+          fontSize: 20, flexShrink: 0
         }}>
-          {status.toUpperCase()}
+          {market.icon || '🔮'}
         </div>
-      </div>
-
-      <ProbBar
-        market={market.implied_probability}
-        model={market.model_probability}
-      />
-
-      <div style={{
-        display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap',
-        fontFamily: 'JetBrains Mono, monospace', fontSize: 10, color: 'var(--text-muted)'
-      }}>
-        {edge !== null && (
-          <>
-            <span style={{ color: status === 'execute' ? 'var(--green)' : 'var(--text-muted)' }}>
-              {market.direction ? `↑ BUY ${market.direction}` : ''}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{
+            fontSize: 14, fontWeight: 600, lineHeight: 1.4,
+            marginBottom: 4, color: '#fff'
+          }}>
+            {market.question}
+          </div>
+          <div style={{
+            fontSize: 12, color: 'var(--text-muted)',
+            display: 'flex', gap: 8, alignItems: 'center'
+          }}>
+            <span>${market.volume > 1000000
+              ? (market.volume / 1000000).toFixed(1) + 'M'
+              : market.volume > 1000
+              ? (market.volume / 1000).toFixed(0) + 'K'
+              : market.volume.toFixed(0)} Vol.
             </span>
-            {market.bet_size_usdc > 0 && (
-              <span style={{ color: 'var(--green)' }}>
-                ${market.bet_size_usdc} USDC
+            {isExecute && edge !== null && (
+              <span style={{
+                background: 'var(--blue-glow)',
+                color: 'var(--blue)', padding: '1px 7px',
+                borderRadius: 20, fontSize: 11, fontWeight: 600
+              }}>
+                {edge > 0 ? '+' : ''}{(edge * 100).toFixed(1)}% EDGE
               </span>
             )}
-            <span style={{
-              padding: '2px 8px', borderRadius: 4,
-              background: edge >= 0 ? 'var(--green-glow)' : 'rgba(248,113,113,0.08)',
-              color: edge >= 0 ? 'var(--green)' : 'var(--red)',
-              fontWeight: 600
-            }}>
-              {edge >= 0 ? '+' : ''}{(edge * 100).toFixed(1)}% edge
-            </span>
-          </>
-        )}
-        {!edge && <span>Awaiting signals</span>}
-        <span>{market.days_to_close?.toFixed(0)}d remaining</span>
-        <span style={{ color: 'var(--text-dim)' }}>
-          ${(market.liquidity / 1000).toFixed(0)}K liq
-        </span>
+          </div>
+        </div>
       </div>
-    </div>
-  )
-}
 
-function SkeletonCard() {
-  return (
-    <div style={{
-      background: 'var(--bg2)', border: '1px solid var(--border)',
-      borderRadius: 12, padding: '16px 18px', marginBottom: 8
-    }}>
-      <div className="skeleton" style={{ height: 14, width: '70%', marginBottom: 12 }} />
-      <div className="skeleton" style={{ height: 6, width: '100%', marginBottom: 12 }} />
+      {/* YES/NO buttons like Polymarket */}
       <div style={{ display: 'flex', gap: 8 }}>
-        <div className="skeleton" style={{ height: 10, width: 60 }} />
-        <div className="skeleton" style={{ height: 10, width: 80 }} />
+        <button style={{
+          flex: 1, padding: '10px',
+          background: 'var(--green-bg)',
+          border: '1px solid transparent',
+          borderRadius: 10, cursor: 'pointer',
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between'
+        }}>
+          <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--green)' }}>Yes</span>
+          <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--green)' }}>
+            {modelProb !== null ? modelProb : yesProb}¢
+          </span>
+        </button>
+        <button style={{
+          flex: 1, padding: '10px',
+          background: 'var(--red-bg)',
+          border: '1px solid transparent',
+          borderRadius: 10, cursor: 'pointer',
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between'
+        }}>
+          <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--red)' }}>No</span>
+          <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--red)' }}>
+            {modelProb !== null ? 100 - modelProb : noProb}¢
+          </span>
+        </button>
       </div>
     </div>
   )
 }
 
-function TracePanel({ market }) {
-  if (!market) return (
-    <div style={{
-      height: '100%', display: 'flex', alignItems: 'center',
-      justifyContent: 'center', flexDirection: 'column', gap: 12,
-      color: 'var(--text-dim)', fontFamily: 'JetBrains Mono, monospace', fontSize: 12
-    }}>
-      <div style={{ fontSize: 32 }}>◈</div>
-      <div>Select a market to view trace</div>
-    </div>
-  )
+function TracePanel({ market, onClose }) {
+  if (!market) return null
 
-  const hasEdge = market.model_probability !== null && market.model_probability !== undefined
+  const hasEdge = market.model_probability != null
   const edge = hasEdge ? market.model_probability - market.implied_probability : null
   const status = !hasEdge ? 'WATCHING' : Math.abs(edge) >= 0.06 ? 'EXECUTE' : 'SKIP'
 
   return (
-    <div style={{ padding: 24, overflowY: 'auto', height: '100%' }}>
+    <div style={{
+      position: 'fixed', inset: 0, background: 'var(--bg)',
+      zIndex: 100, overflowY: 'auto', padding: '0 0 80px'
+    }}>
+      {/* Header */}
       <div style={{
-        fontFamily: 'JetBrains Mono, monospace', fontSize: 10,
-        color: 'var(--text-muted)', letterSpacing: 2, marginBottom: 16,
-        textTransform: 'uppercase'
-      }}>Decision Trace</div>
-
-      <div style={{ fontSize: 13, fontWeight: 700, lineHeight: 1.5, marginBottom: 14 }}>
-        {market.question}
+        position: 'sticky', top: 0, background: 'var(--bg)',
+        padding: '16px 20px', borderBottom: '1px solid var(--border)',
+        display: 'flex', alignItems: 'center', gap: 12, zIndex: 1
+      }}>
+        <button onClick={onClose} style={{
+          background: 'var(--bg2)', border: 'none',
+          borderRadius: 10, width: 36, height: 36,
+          color: '#fff', fontSize: 18, cursor: 'pointer',
+          display: 'flex', alignItems: 'center', justifyContent: 'center'
+        }}>←</button>
+        <div style={{ fontSize: 16, fontWeight: 700 }}>Decision Trace</div>
       </div>
 
-      {/* Verdict */}
-      <div style={{
-        display: 'flex', alignItems: 'center', gap: 10,
-        padding: '12px 16px', borderRadius: 10, marginBottom: 16,
-        background: status === 'EXECUTE' ? 'var(--green-glow)'
-          : status === 'SKIP' ? 'var(--amber-glow)'
-          : 'rgba(255,255,255,0.03)',
-        border: `1px solid ${status === 'EXECUTE' ? 'rgba(52,211,153,0.2)'
-          : status === 'SKIP' ? 'rgba(251,191,36,0.15)'
-          : 'var(--border)'}`
-      }}>
-        <span style={{ fontSize: 16 }}>
-          {status === 'EXECUTE' ? '✦' : status === 'SKIP' ? '⊘' : '◌'}
-        </span>
-        <div style={{ flex: 1 }}>
-          <div style={{
-            fontFamily: 'JetBrains Mono, monospace', fontSize: 11, fontWeight: 600,
+      <div style={{ padding: 20 }}>
+        {/* Market title */}
+        <div style={{
+          fontSize: 18, fontWeight: 700, lineHeight: 1.4, marginBottom: 16
+        }}>{market.question}</div>
+
+        {/* Status */}
+        <div style={{
+          display: 'inline-flex', alignItems: 'center', gap: 8,
+          padding: '8px 14px', borderRadius: 10, marginBottom: 20,
+          background: status === 'EXECUTE' ? 'var(--green-bg)'
+            : status === 'SKIP' ? 'rgba(245,166,35,0.15)'
+            : 'var(--bg2)',
+          border: `1px solid ${status === 'EXECUTE' ? 'var(--green)'
+            : status === 'SKIP' ? 'var(--amber)'
+            : 'var(--border)'}`
+        }}>
+          <span style={{ fontSize: 16 }}>
+            {status === 'EXECUTE' ? '✓' : status === 'SKIP' ? '⊘' : '◌'}
+          </span>
+          <span style={{
+            fontSize: 14, fontWeight: 700,
             color: status === 'EXECUTE' ? 'var(--green)'
               : status === 'SKIP' ? 'var(--amber)'
               : 'var(--text-muted)'
           }}>
             {status} {market.direction ? `· BUY ${market.direction}` : ''}
-          </div>
-          <div style={{
-            fontFamily: 'JetBrains Mono, monospace', fontSize: 9,
-            color: 'var(--text-dim)', marginTop: 2
-          }}>
-            {market.market_id}
-          </div>
+          </span>
+          {market.bet_size_usdc > 0 && (
+            <span style={{
+              marginLeft: 8, fontSize: 15, fontWeight: 700, color: 'var(--green)'
+            }}>${market.bet_size_usdc}</span>
+          )}
         </div>
-        {market.bet_size_usdc > 0 && (
+
+        {/* Probability comparison */}
+        {hasEdge && (
           <div style={{
-            fontFamily: 'JetBrains Mono, monospace', fontSize: 14,
-            fontWeight: 700, color: 'var(--green)'
+            display: 'grid', gridTemplateColumns: '1fr auto 1fr',
+            gap: 8, marginBottom: 20, alignItems: 'center'
           }}>
-            ${market.bet_size_usdc}
+            <div style={{
+              padding: '16px', background: 'var(--bg2)',
+              borderRadius: 12, textAlign: 'center',
+              border: '1px solid var(--border)'
+            }}>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.5 }}>Market</div>
+              <div style={{ fontSize: 28, fontWeight: 800, color: 'var(--text-muted)' }}>
+                {Math.round(market.implied_probability * 100)}%
+              </div>
+            </div>
+            <div style={{ color: 'var(--blue)', fontSize: 20, fontWeight: 800 }}>→</div>
+            <div style={{
+              padding: '16px', background: 'var(--blue-glow)',
+              borderRadius: 12, textAlign: 'center',
+              border: '1px solid var(--blue)'
+            }}>
+              <div style={{ fontSize: 11, color: 'var(--blue)', marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.5 }}>Pythia</div>
+              <div style={{ fontSize: 28, fontWeight: 800, color: 'var(--blue)' }}>
+                {Math.round(market.model_probability * 100)}%
+              </div>
+            </div>
           </div>
         )}
-      </div>
 
-      {/* Prob comparison */}
-      {hasEdge && (
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr auto 1fr', gap: 8, marginBottom: 16, alignItems: 'center' }}>
-          <div style={{
-            padding: 12, background: 'var(--bg2)',
-            border: '1px solid var(--border)', borderRadius: 8, textAlign: 'center'
-          }}>
-            <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 9, color: 'var(--text-muted)', marginBottom: 6, letterSpacing: 1 }}>MARKET</div>
-            <div style={{ fontSize: 22, fontWeight: 800, color: 'var(--text-muted)', letterSpacing: -1 }}>
-              {(market.implied_probability * 100).toFixed(1)}%
-            </div>
-          </div>
-          <div style={{ color: 'var(--green)', fontSize: 18, fontWeight: 800 }}>→</div>
-          <div style={{
-            padding: 12, background: 'var(--bg2)',
-            border: '1px solid var(--border-accent)', borderRadius: 8, textAlign: 'center'
-          }}>
-            <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 9, color: 'var(--cyan)', marginBottom: 6, letterSpacing: 1 }}>PYTHIA</div>
-            <div style={{ fontSize: 22, fontWeight: 800, color: 'var(--cyan)', letterSpacing: -1 }}>
-              {(market.model_probability * 100).toFixed(1)}%
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Edge metrics */}
-      {edge !== null && (
+        {/* Metrics grid */}
         <div style={{
           display: 'grid', gridTemplateColumns: '1fr 1fr',
-          gap: 8, marginBottom: 16
+          gap: 8, marginBottom: 20
         }}>
           {[
-            { label: 'Raw Edge', value: `${edge >= 0 ? '+' : ''}${(edge * 100).toFixed(2)}%`, color: edge >= 0 ? 'var(--green)' : 'var(--red)' },
-            { label: 'Liquidity', value: `$${(market.liquidity / 1000).toFixed(0)}K`, color: 'var(--text)' },
-            { label: 'Days Left', value: `${market.days_to_close?.toFixed(0)}d`, color: 'var(--text)' },
-            { label: 'Category', value: market.category || 'unknown', color: 'var(--purple)' },
+            { label: 'Edge', value: edge ? `${edge >= 0 ? '+' : ''}${(edge * 100).toFixed(2)}%` : 'N/A', color: edge >= 0 ? 'var(--green)' : 'var(--red)' },
+            { label: 'Liquidity', value: `$${(market.liquidity / 1000).toFixed(0)}K`, color: '#fff' },
+            { label: 'Days Left', value: `${market.days_to_close?.toFixed(0)}d`, color: '#fff' },
+            { label: 'Category', value: market.category || 'Other', color: 'var(--blue)' },
           ].map(({ label, value, color }) => (
             <div key={label} style={{
-              padding: '10px 12px', background: 'var(--bg2)',
-              border: '1px solid var(--border)', borderRadius: 8
+              padding: '14px', background: 'var(--bg2)',
+              borderRadius: 12, border: '1px solid var(--border)'
             }}>
-              <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 9, color: 'var(--text-muted)', marginBottom: 4 }}>
-                {label}
-              </div>
-              <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 13, fontWeight: 700, color }}>
-                {value}
-              </div>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 4 }}>{label}</div>
+              <div style={{ fontSize: 16, fontWeight: 700, color }}>{value}</div>
             </div>
           ))}
         </div>
-      )}
 
-      {/* Watching state */}
-      {!hasEdge && (
-        <div style={{
-          padding: 16, background: 'var(--bg2)',
-          border: '1px solid var(--border)', borderRadius: 8,
-          fontFamily: 'JetBrains Mono, monospace', fontSize: 11,
-          color: 'var(--text-muted)', textAlign: 'center'
-        }}>
-          Run the agent to analyze this market
-        </div>
-      )}
+        {!hasEdge && (
+          <div style={{
+            padding: 20, background: 'var(--bg2)',
+            borderRadius: 12, textAlign: 'center',
+            color: 'var(--text-muted)', fontSize: 14,
+            border: '1px solid var(--border)'
+          }}>
+            Run the agent to analyze this market
+          </div>
+        )}
+      </div>
     </div>
   )
 }
 
 export default function Markets({ onRun, running }) {
+  const { wallet } = useWallet()
   const [markets, setMarkets] = useState([])
   const [loading, setLoading] = useState(true)
   const [selected, setSelected] = useState(null)
+  const [category, setCategory] = useState('All')
+  const [search, setSearch] = useState('')
   const [error, setError] = useState(null)
-  const [showTrace, setShowTrace] = useState(false)
 
   useEffect(() => {
     fetchMarkets()
@@ -308,125 +243,114 @@ export default function Markets({ onRun, running }) {
       setError(null)
       const data = await getMarkets()
       setMarkets(data.markets || [])
-      if (data.markets?.length > 0) setSelected(data.markets[0])
     } catch (err) {
-      setError('Could not connect to backend. Make sure the server is running.')
+      setError('Could not connect to backend')
     } finally {
       setLoading(false)
     }
   }
 
+  const filtered = markets.filter(m => {
+    const matchCat = category === 'All' || m.category === category
+    const matchSearch = !search || m.question.toLowerCase().includes(search.toLowerCase())
+    return matchCat && matchSearch
+  })
+
   return (
-    <div style={{ display: 'flex', height: '100%', overflow: 'hidden' }}>
+    <div style={{ height: '100%', overflowY: 'auto', padding: '0 0 80px' }}>
 
-      {/* Markets list */}
-      <div style={{
-        flex: 1, borderRight: '1px solid var(--border)',
-        overflowY: 'auto', padding: 24,
-        display: showTrace ? 'none' : 'block'
-      }}
-        className="markets-list"
-      >
-        {/* Panel header */}
+      {/* Search bar */}
+      <div style={{ padding: '12px 16px', position: 'sticky', top: 0, background: 'var(--bg)', zIndex: 10, borderBottom: '1px solid var(--border)' }}>
         <div style={{
-          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-          marginBottom: 16
+          display: 'flex', alignItems: 'center', gap: 10,
+          background: 'var(--bg2)', borderRadius: 12,
+          padding: '10px 14px', border: '1px solid var(--border)'
         }}>
-          <div style={{
-            fontFamily: 'JetBrains Mono, monospace', fontSize: 10,
-            color: 'var(--text-muted)', letterSpacing: 2, textTransform: 'uppercase',
-            display: 'flex', alignItems: 'center', gap: 12
-          }}>
-            Active Markets
-            <span style={{
-              padding: '2px 8px', background: 'var(--cyan-glow)',
-              border: '1px solid var(--border-accent)',
-              borderRadius: 4, color: 'var(--cyan)'
-            }}>
-              {markets.length}
-            </span>
-          </div>
-          <button onClick={fetchMarkets} style={{
-            background: 'transparent', border: '1px solid var(--border)',
-            borderRadius: 6, padding: '5px 12px',
-            color: 'var(--text-muted)', fontSize: 11,
-            fontFamily: 'JetBrains Mono, monospace',
-            cursor: 'pointer'
-          }}>↺ Refresh</button>
+          <span style={{ fontSize: 16, color: 'var(--text-muted)' }}>🔍</span>
+          <input
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="Search markets..."
+            style={{
+              flex: 1, background: 'transparent', border: 'none',
+              color: '#fff', fontSize: 15, outline: 'none'
+            }}
+          />
         </div>
+      </div>
 
-        {/* Error */}
-        {error && (
-          <div style={{
-            padding: 16, background: 'rgba(248,113,113,0.08)',
-            border: '1px solid rgba(248,113,113,0.2)',
-            borderRadius: 10, color: 'var(--red)',
-            fontFamily: 'JetBrains Mono, monospace', fontSize: 11,
-            marginBottom: 16
-          }}>
-            ⚠ {error}
-          </div>
-        )}
+      {/* Category pills */}
+      <div style={{
+        display: 'flex', gap: 8, padding: '12px 16px',
+        overflowX: 'auto', scrollbarWidth: 'none'
+      }}>
+        {CATEGORIES.map(cat => (
+          <button
+            key={cat}
+            onClick={() => setCategory(cat)}
+            style={{
+              padding: '7px 14px', borderRadius: 20, border: 'none',
+              background: category === cat ? 'var(--blue)' : 'var(--bg2)',
+              color: category === cat ? '#fff' : 'var(--text-muted)',
+              fontSize: 13, fontWeight: 500, cursor: 'pointer',
+              whiteSpace: 'nowrap', transition: 'all 0.15s',
+              flexShrink: 0
+            }}
+          >{cat}</button>
+        ))}
+      </div>
 
-        {/* Loading */}
-        {loading && Array.from({ length: 5 }).map((_, i) => <SkeletonCard key={i} />)}
+      {/* Markets count */}
+      <div style={{
+        padding: '0 16px 12px',
+        fontSize: 13, color: 'var(--text-muted)',
+        display: 'flex', justifyContent: 'space-between', alignItems: 'center'
+      }}>
+        <span>{filtered.length} markets</span>
+        <button onClick={fetchMarkets} style={{
+          background: 'none', border: 'none',
+          color: 'var(--blue)', fontSize: 13, cursor: 'pointer', fontWeight: 500
+        }}>Refresh ↺</button>
+      </div>
 
-        {/* Markets */}
-        {!loading && markets.map((m, i) => (
+      {/* Error */}
+      {error && (
+        <div style={{
+          margin: '0 16px 12px', padding: '12px 16px',
+          background: 'var(--red-bg)', borderRadius: 12,
+          color: 'var(--red)', fontSize: 13
+        }}>{error}</div>
+      )}
+
+      {/* Loading skeletons */}
+      {loading && Array.from({ length: 6 }).map((_, i) => (
+        <div key={i} style={{
+          margin: '0 16px 8px', height: 100,
+          background: 'var(--bg2)', borderRadius: 16,
+          animation: 'pulse 1.5s infinite'
+        }} />
+      ))}
+
+      {/* Market cards */}
+      <div style={{ padding: '0 16px' }}>
+        {!loading && filtered.map((m, i) => (
           <MarketCard
             key={m.market_id}
             market={m}
             index={i}
             selected={selected?.market_id === m.market_id}
-            onClick={(market) => {
-              setSelected(market)
-              setShowTrace(true)
-            }}
+            onSelect={setSelected}
           />
         ))}
-
-        {!loading && markets.length === 0 && !error && (
-          <div style={{
-            textAlign: 'center', padding: 40,
-            color: 'var(--text-muted)',
-            fontFamily: 'JetBrains Mono, monospace', fontSize: 12
-          }}>
-            No markets found. Try refreshing.
-          </div>
-        )}
       </div>
 
-      {/* Trace panel — desktop always visible, mobile toggled */}
-      <div style={{
-        width: 380, flexShrink: 0,
-        background: 'var(--bg)',
-        display: showTrace ? 'flex' : 'flex',
-        flexDirection: 'column',
-        overflow: 'hidden'
-      }}
-        className="trace-panel-wrapper"
-      >
-        {/* Mobile back button */}
-        <div style={{
-          padding: '12px 16px', borderBottom: '1px solid var(--border)',
-          display: 'none'
-        }} className="mobile-back">
-          <button onClick={() => setShowTrace(false)} style={{
-            background: 'transparent', border: 'none',
-            color: 'var(--cyan)', fontFamily: 'JetBrains Mono, monospace',
-            fontSize: 12, cursor: 'pointer'
-          }}>← Back to markets</button>
-        </div>
-        <TracePanel market={selected} />
-      </div>
-
-      <style>{`
-        @media (max-width: 768px) {
-          .markets-list { display: ${showTrace ? 'none' : 'block'} !important; flex: none !important; width: 100% !important; border-right: none !important; }
-          .trace-panel-wrapper { width: 100% !important; display: ${showTrace ? 'flex' : 'none'} !important; }
-          .mobile-back { display: block !important; }
-        }
-      `}</style>
+      {/* Trace panel */}
+      {selected && (
+        <TracePanel
+          market={selected}
+          onClose={() => setSelected(null)}
+        />
+      )}
     </div>
   )
 }
