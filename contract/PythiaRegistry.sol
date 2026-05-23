@@ -2,7 +2,7 @@
 pragma solidity ^0.8.20;
 
 contract PythiaRegistry {
-    uint256 public constant STARTING_BALANCE = 1000 * 1e6; // $1000 in USDC (6 decimals)
+    uint256 public constant STARTING_BALANCE = 1000 * 1e6;
 
     struct Wallet {
         bool registered;
@@ -27,20 +27,15 @@ contract PythiaRegistry {
         _;
     }
 
-    modifier onlyRegistered() {
-        require(wallets[msg.sender].registered, "Wallet not registered");
-        _;
-    }
-
     constructor() {
         owner = msg.sender;
     }
 
-    // Register a new wallet and give it starting balance
-    function registerWallet() external {
-        require(!wallets[msg.sender].registered, "Already registered");
+    // Owner registers wallet on behalf of user
+    function registerWallet(address wallet) external onlyOwner {
+        require(!wallets[wallet].registered, "Already registered");
 
-        wallets[msg.sender] = Wallet({
+        wallets[wallet] = Wallet({
             registered: true,
             virtualBalance: STARTING_BALANCE,
             totalExecutions: 0,
@@ -49,17 +44,14 @@ contract PythiaRegistry {
             lastActiveAt: block.timestamp
         });
 
-        registeredAddresses.push(msg.sender);
-
-        emit WalletRegistered(msg.sender, STARTING_BALANCE, block.timestamp);
+        registeredAddresses.push(wallet);
+        emit WalletRegistered(wallet, STARTING_BALANCE, block.timestamp);
     }
 
-    // Check if wallet is registered
     function isRegistered(address wallet) external view returns (bool) {
         return wallets[wallet].registered;
     }
 
-    // Get wallet data
     function getWallet(address wallet) external view returns (
         bool registered,
         uint256 virtualBalance,
@@ -79,7 +71,6 @@ contract PythiaRegistry {
         );
     }
 
-    // Record an execution — called by backend after Pythia executes
     function recordExecution(
         address wallet,
         uint256 betSize,
@@ -96,7 +87,6 @@ contract PythiaRegistry {
         emit BalanceUpdated(wallet, wallets[wallet].virtualBalance, block.timestamp);
     }
 
-    // Record a skip
     function recordSkip(
         address wallet,
         string calldata reason
@@ -109,7 +99,6 @@ contract PythiaRegistry {
         emit SkipRecorded(wallet, reason, block.timestamp);
     }
 
-    // Update balance when market resolves (profit/loss)
     function updateBalance(
         address wallet,
         uint256 newBalance
@@ -122,12 +111,10 @@ contract PythiaRegistry {
         emit BalanceUpdated(wallet, newBalance, block.timestamp);
     }
 
-    // Get total registered wallets
     function getTotalWallets() external view returns (uint256) {
         return registeredAddresses.length;
     }
 
-    // Get all registered addresses (for leaderboard)
     function getAllWallets() external view returns (address[] memory) {
         return registeredAddresses;
     }

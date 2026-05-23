@@ -11,9 +11,7 @@ const client = initiateDeveloperControlledWalletsClient({
 const ARC_RPC = process.env.ARC_RPC || 'https://rpc.testnet.arc.network'
 const CONTRACT_ADDRESS = process.env.CONTRACT_ADDRESS
 const DEPLOYER_PRIVATE_KEY = process.env.DEPLOYER_PRIVATE_KEY
-const STARTING_BALANCE = 1000 * 1e6 // $1000 in USDC 6 decimals
 
-// Load contract ABI
 function getContractABI() {
   try {
     const deploymentPath = path.join(__dirname, '../../contract/deployment.json')
@@ -25,7 +23,6 @@ function getContractABI() {
   }
 }
 
-// Get contract instance
 function getContract() {
   const provider = new ethers.JsonRpcProvider(ARC_RPC)
   const wallet = new ethers.Wallet(DEPLOYER_PRIVATE_KEY, provider)
@@ -34,28 +31,16 @@ function getContract() {
   return new ethers.Contract(CONTRACT_ADDRESS, abi, wallet)
 }
 
-// Get or create wallet set
 let walletSetId = process.env.CIRCLE_WALLET_SET_ID || null
+const emailWalletMap = {}
 
 async function getOrCreateWalletSet() {
   if (walletSetId) return walletSetId
-
-  try {
-    const response = await client.createWalletSet({
-      name: 'Pythia Users'
-    })
-    walletSetId = response.data?.walletSet?.id
-    console.log('[circleWallet] Created wallet set:', walletSetId)
-    return walletSetId
-  } catch (err) {
-    console.error('[circleWallet] Failed to create wallet set:', err.message)
-    throw err
-  }
+  const response = await client.createWalletSet({ name: 'Pythia Users' })
+  walletSetId = response.data?.walletSet?.id
+  console.log('[circleWallet] Created wallet set:', walletSetId)
+  return walletSetId
 }
-
-// Simple in-memory email → wallet mapping
-// In production this would be a database
-const emailWalletMap = {}
 
 async function getWalletByEmail(email) {
   return emailWalletMap[email.toLowerCase()] || null
@@ -63,9 +48,8 @@ async function getWalletByEmail(email) {
 
 async function createWalletForEmail(email) {
   const setId = await getOrCreateWalletSet()
-
   const response = await client.createWallets({
-    accountType: 'SCA',
+    accountType: 'EOA',
     blockchains: ['ARC-TESTNET'],
     count: 1,
     walletSetId: setId,
@@ -86,20 +70,22 @@ async function createWalletForEmail(email) {
 }
 
 async function registerOnContract(address) {
-  const contract = getContract()
-
-  // Check if already registered
-  const isRegistered = await contract.isRegistered(address)
-  if (isRegistered) {
-    console.log('[circleWallet] Already registered onchain:', address)
+  try {
+    const contract = getContract()
+    const isRegistered = await contract.isRegistered(address)
+    if (isRegistered) {
+      console.log('[circleWallet] Already registered onchain:', address)
+      return false
+    }
+    // Owner registers on behalf of user
+    const tx = await contract.registerWallet(address, { gasLimit: 300000 })
+    await tx.wait()
+    console.log('[circleWallet] Registered onchain:', address, 'tx:', tx.hash)
+    return true
+  } catch (err) {
+    console.error('[circleWallet] Contract registration failed:', err.message)
     return false
   }
-
-  // Register wallet
-  const tx = await contract.registerWallet({ gasLimit: 200000 })
-  await tx.wait()
-  console.log('[circleWallet] Registered onchain:', address, 'tx:', tx.hash)
-  return true
 }
 
 async function getOnchainData(address) {
@@ -120,20 +106,16 @@ async function getOnchainData(address) {
   }
 }
 
-// Main function — check email, return wallet info
 async function connectWallet(email) {
   if (!email || !email.includes('@')) {
     throw new Error('Invalid email address')
   }
 
   const normalizedEmail = email.toLowerCase().trim()
-
-  // Check if we have a wallet for this email
   let walletData = await getWalletByEmail(normalizedEmail)
   let isNew = false
 
   if (!walletData) {
-    // New user — create wallet
     console.log('[circleWallet] New user, creating wallet for:', normalizedEmail)
     walletData = await createWalletForEmail(normalizedEmail)
     isNew = true
@@ -141,10 +123,8 @@ async function connectWallet(email) {
     console.log('[circleWallet] Returning user:', normalizedEmail)
   }
 
-  // Get onchain data
   let onchain = await getOnchainData(walletData.address)
 
-  // If new or not registered onchain, register
   if (!onchain || !onchain.registered) {
     await registerOnContract(walletData.address)
     onchain = await getOnchainData(walletData.address)
@@ -168,10 +148,7 @@ async function recordExecution(address, betSizeUsdc, direction) {
     const contract = getContract()
     const betSizeOnchain = Math.floor(betSizeUsdc * 1e6)
     const tx = await contract.recordExecution(
-      address,
-      betSizeOnchain,
-      direction,
-      { gasLimit: 200000 }
+      address, betSizeOnchain, direction, { gasLimit: 200000 }
     )
     await tx.wait()
     console.log('[circleWallet] Execution recorded onchain for:', address)

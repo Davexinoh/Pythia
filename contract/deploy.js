@@ -19,7 +19,7 @@ async function deploy() {
   console.log('[deploy] Deployer address:', wallet.address)
 
   const balance = await provider.getBalance(wallet.address)
-  console.log('[deploy] Balance:', ethers.formatEthe(balance), 'USDC')
+console.log('[deploy] USDC Balance:', ethers.formatUnits(balance, 6), 'USDC')
 
   if (balance === 0n) {
     console.error('[deploy] No balance — fund this address on Arc testnet faucet first')
