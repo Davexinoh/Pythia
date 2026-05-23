@@ -2,7 +2,6 @@ const axios = require('axios')
 
 const BASE_URL = 'https://gamma-api.polymarket.com'
 const MIN_LIQUIDITY = 5000
-const MAX_DAYS_TO_CLOSE = 180
 const MIN_DAYS_TO_CLOSE = 0.1
 
 function daysUntilClose(endDateIso) {
@@ -29,64 +28,62 @@ function extractImpliedProbability(market) {
 
 function getCategory(market) {
   const q = (market.question || '').toLowerCase()
-  const tags = market.tags || []
-  const tagStr = tags.join(' ').toLowerCase()
+  const tags = (market.tags || []).join(' ').toLowerCase()
+  const combined = q + ' ' + tags
 
-  if (q.includes('btc') || q.includes('bitcoin')) return 'Bitcoin'
-  if (q.includes('eth') || q.includes('ethereum')) return 'Ethereum'
-  if (q.includes('sol') || q.includes('solana')) return 'Solana'
-  if (q.includes('crypto') || q.includes('coin') || tagStr.includes('crypto')) return 'Crypto'
-  if (q.includes('nba') || q.includes('nfl') || q.includes('nhl') || q.includes('mlb') || q.includes('soccer') || tagStr.includes('sports')) return 'Sports'
-  if (q.includes('trump') || q.includes('biden') || q.includes('election') || q.includes('president')) return 'Politics'
-  if (q.includes('fed') || q.includes('rate') || q.includes('gdp') || q.includes('inflation')) return 'Macro'
-  if (q.includes('gta') || q.includes('album') || q.includes('movie') || q.includes('oscar')) return 'Pop Culture'
-  if (tagStr.includes('politics')) return 'Politics'
-  if (tagStr.includes('business')) return 'Business'
+  if (combined.includes('btc') || combined.includes('bitcoin')) return 'Bitcoin'
+  if (combined.includes('eth') || combined.includes('ethereum')) return 'Ethereum'
+  if (combined.includes('sol') || combined.includes('solana')) return 'Solana'
+  if (combined.includes('nba') || combined.includes('nfl') || combined.includes('nhl') || combined.includes('mlb') || combined.includes('fifa') || combined.includes('world cup') || combined.includes('stanley cup') || combined.includes('super bowl') || combined.includes('champions league') || combined.includes('premier league')) return 'Sports'
+  if (combined.includes('trump') || combined.includes('biden') || combined.includes('election') || combined.includes('president') || combined.includes('senate') || combined.includes('congress') || combined.includes('republican') || combined.includes('democrat') || combined.includes('vote') || combined.includes('primary')) return 'Politics'
+  if (combined.includes('fed') || combined.includes('interest rate') || combined.includes('gdp') || combined.includes('inflation') || combined.includes('recession') || combined.includes('cpi') || combined.includes('fomc')) return 'Macro'
+  if (combined.includes('ai') || combined.includes('openai') || combined.includes('anthropic') || combined.includes('google') || combined.includes('microsoft') || combined.includes('apple') || combined.includes('nvidia')) return 'Tech'
+  if (combined.includes('crypto') || combined.includes('coin') || combined.includes('token') || combined.includes('defi') || combined.includes('blockchain') || combined.includes('xrp') || combined.includes('doge') || combined.includes('pepe') || combined.includes('bnb') || combined.includes('avax') || combined.includes('chainlink')) return 'Crypto'
+  if (combined.includes('gta') || combined.includes('album') || combined.includes('movie') || combined.includes('oscar') || combined.includes('grammy') || combined.includes('taylor') || combined.includes('rihanna') || combined.includes('emmy') || combined.includes('box office')) return 'Pop Culture'
   return 'Other'
 }
 
 function getIcon(market) {
-  const category = getCategory(market)
+  const cat = getCategory(market)
   const icons = {
     'Bitcoin': '₿',
     'Ethereum': 'Ξ',
     'Solana': '◎',
-    'Crypto': '🔷',
+    'Crypto': '🪙',
     'Sports': '🏆',
     'Politics': '🏛️',
     'Macro': '📈',
+    'Tech': '🤖',
     'Pop Culture': '🎬',
-    'Business': '💼',
     'Other': '🔮'
   }
-  return icons[category] || '🔮'
+  return icons[cat] || '🔮'
 }
 
 async function fetchMarketsPage(offset = 0, limit = 100) {
-  const response = await axios.get(BASE_URL + '/markets', {
-    params: {
-      active: true,
-      closed: false,
-      limit,
-      offset
-    },
-    timeout: 15000
-  })
-  return Array.isArray(response.data) ? response.data : response.data.data || []
+  try {
+    const response = await axios.get(BASE_URL + '/markets', {
+      params: { active: true, closed: false, limit, offset },
+      timeout: 15000
+    })
+    return Array.isArray(response.data) ? response.data : response.data.data || []
+  } catch {
+    return []
+  }
 }
 
 async function fetchMarkets() {
   try {
-    // Fetch multiple pages
-    const pages = await Promise.all([
-      fetchMarketsPage(0, 100),
-      fetchMarketsPage(100, 100),
-      fetchMarketsPage(200, 100),
-      fetchMarketsPage(300, 100),
-      fetchMarketsPage(400, 100),
-    ])
+    const pagePromises = []
+    for (let offset = 0; offset < 1000; offset += 100) {
+      pagePromises.push(fetchMarketsPage(offset, 100))
+    }
 
-    const raw = pages.flat()
+    const pages = await Promise.allSettled(pagePromises)
+    const raw = pages
+      .filter(p => p.status === 'fulfilled')
+      .flatMap(p => p.value)
+
     const seen = new Set()
     const filtered = []
 
@@ -101,7 +98,7 @@ async function fetchMarkets() {
       if (liquidity < MIN_LIQUIDITY) continue
 
       const days = daysUntilClose(market.endDateIso || market.end_date_iso)
-      if (days === null || days < MIN_DAYS_TO_CLOSE || days > MAX_DAYS_TO_CLOSE) continue
+      if (days === null || days < MIN_DAYS_TO_CLOSE) continue
 
       const impliedProbability = extractImpliedProbability(market)
       if (impliedProbability === null) continue
@@ -120,20 +117,13 @@ async function fetchMarkets() {
       })
     }
 
-    // Sort by volume descending
     filtered.sort((a, b) => b.volume - a.volume)
 
-    console.log('[marketFetcher] Fetched ' + raw.length + ' markets → ' + filtered.length + ' passed filters')
+    console.log('[marketFetcher] Fetched ' + raw.length + ' raw → ' + filtered.length + ' passed filters')
     return filtered
 
   } catch (err) {
-    if (err.code === 'ECONNABORTED') {
-      console.error('[marketFetcher] Request timed out')
-    } else if (err.response) {
-      console.error('[marketFetcher] API error ' + err.response.status)
-    } else {
-      console.error('[marketFetcher] Error:', err.message)
-    }
+    console.error('[marketFetcher] Error:', err.message)
     return []
   }
 }
