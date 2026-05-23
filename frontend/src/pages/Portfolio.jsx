@@ -1,32 +1,9 @@
 import { useState, useEffect } from 'react'
 import { getStats, getTraces } from '../api.js'
-
-function StatCard({ label, value, sub, color, delay }) {
-  return (
-    <div className={`fade-up-${delay}`} style={{
-      background: 'var(--bg2)', border: '1px solid var(--border)',
-      borderRadius: 12, padding: '20px 24px'
-    }}>
-      <div style={{
-        fontFamily: 'JetBrains Mono, monospace', fontSize: 10,
-        color: 'var(--text-muted)', letterSpacing: 1.5,
-        textTransform: 'uppercase', marginBottom: 10
-      }}>{label}</div>
-      <div style={{
-        fontSize: 32, fontWeight: 800, letterSpacing: -1,
-        color: color || 'var(--text)', lineHeight: 1
-      }}>{value}</div>
-      {sub && (
-        <div style={{
-          fontFamily: 'JetBrains Mono, monospace', fontSize: 10,
-          color: 'var(--text-dim)', marginTop: 8
-        }}>{sub}</div>
-      )}
-    </div>
-  )
-}
+import { useWallet } from '../context/WalletContext'
 
 export default function Portfolio() {
+  const { wallet, disconnect } = useWallet()
   const [stats, setStats] = useState(null)
   const [traces, setTraces] = useState([])
   const [loading, setLoading] = useState(true)
@@ -34,7 +11,7 @@ export default function Portfolio() {
   useEffect(() => {
     async function load() {
       try {
-        const [s, t] = await Promise.all([getStats(), getTraces()])
+        const [s, t] = await Promise.all([getStats(), getTraces(wallet?.address)])
         setStats(s)
         setTraces(t.traces || [])
       } catch {} finally {
@@ -47,170 +24,125 @@ export default function Portfolio() {
   }, [])
 
   const executed = traces.filter(t => t.status === 'SIMULATED' || t.status === 'EXECUTED')
-  const totalUsdc = executed.reduce((sum, t) => sum + (t.decision?.bet_size_usdc || 0), 0)
-  const skipReasons = stats?.skipReasons || {}
+  const totalBet = executed.reduce((sum, t) => sum + (t.decision?.bet_size_usdc || 0), 0)
 
   return (
-    <div style={{ padding: 28, overflowY: 'auto', height: '100%' }}>
+    <div style={{ height: '100%', overflowY: 'auto', padding: '20px 16px 80px' }}>
 
+      {/* Wallet card */}
       <div style={{
-        fontFamily: 'JetBrains Mono, monospace', fontSize: 10,
-        color: 'var(--text-muted)', letterSpacing: 2,
-        textTransform: 'uppercase', marginBottom: 20
-      }}>Portfolio Overview</div>
-
-      {loading ? (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
-          {Array.from({ length: 4 }).map((_, i) => (
-            <div key={i} className="skeleton" style={{ height: 110, borderRadius: 12 }} />
-          ))}
+        background: 'linear-gradient(135deg, #0070f3, #00c73c)',
+        borderRadius: 20, padding: '24px', marginBottom: 20
+      }}>
+        <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.7)', marginBottom: 4, textTransform: 'uppercase', letterSpacing: 0.5 }}>
+          Your Balance
         </div>
-      ) : (
-        <>
-          {/* Stat cards */}
-          <div style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
-            gap: 12, marginBottom: 28
+        <div style={{ fontSize: 36, fontWeight: 800, color: '#fff', letterSpacing: -1 }}>
+          ${wallet?.virtualBalance?.toFixed(2) || '1000.00'}
+        </div>
+        <div style={{ fontSize: 13, color: 'rgba(255,255,255,0.7)', marginTop: 4 }}>
+          Virtual USDC · Arc Testnet
+        </div>
+        <div style={{
+          marginTop: 16, paddingTop: 16,
+          borderTop: '1px solid rgba(255,255,255,0.2)',
+          fontSize: 12, color: 'rgba(255,255,255,0.7)'
+        }}>
+          {wallet?.email} · {wallet?.address?.slice(0, 6)}...{wallet?.address?.slice(-4)}
+        </div>
+      </div>
+
+      {/* Stats grid */}
+      <div style={{
+        display: 'grid', gridTemplateColumns: '1fr 1fr',
+        gap: 8, marginBottom: 20
+      }}>
+        {[
+          { label: 'Markets Analyzed', value: stats?.total || 0, color: '#fff' },
+          { label: 'Executed', value: stats?.executed || 0, color: 'var(--green)' },
+          { label: 'Skipped', value: stats?.skipped || 0, color: 'var(--amber)' },
+          { label: 'Total Deployed', value: `$${totalBet.toFixed(0)}`, color: 'var(--blue)' },
+        ].map(({ label, value, color }) => (
+          <div key={label} style={{
+            padding: '16px', background: 'var(--bg2)',
+            borderRadius: 16, border: '1px solid var(--border)'
           }}>
-            <StatCard label="Markets Watched" value={stats?.total || 0} sub="this session" color="var(--cyan)" delay={1} />
-            <StatCard label="Executed" value={stats?.executed || 0} sub={`$${totalUsdc.toFixed(2)} USDC`} color="var(--green)" delay={2} />
-            <StatCard label="Skipped" value={stats?.skipped || 0} sub="edge below threshold" color="var(--amber)" delay={3} />
-            <StatCard label="Invalidated" value={stats?.invalidated || 0} sub="signal failures" color="var(--red)" delay={4} />
+            <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 6 }}>{label}</div>
+            <div style={{ fontSize: 24, fontWeight: 800, color }}>{value}</div>
           </div>
+        ))}
+      </div>
 
-          {/* Executed positions */}
-          {executed.length > 0 && (
-            <div style={{ marginBottom: 28 }}>
-              <div style={{
-                fontFamily: 'JetBrains Mono, monospace', fontSize: 10,
-                color: 'var(--text-muted)', letterSpacing: 2,
-                textTransform: 'uppercase', marginBottom: 14,
-                display: 'flex', alignItems: 'center', gap: 10
+      {/* Positions */}
+      {executed.length > 0 && (
+        <div style={{ marginBottom: 20 }}>
+          <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 12 }}>
+            Recent Positions
+          </div>
+          {executed.slice(0, 10).map((t, i) => {
+            const md = t.market_data || {}
+            const dec = t.decision || {}
+            return (
+              <div key={t.execution_id} style={{
+                padding: '14px 16px', background: 'var(--bg2)',
+                borderRadius: 14, marginBottom: 8,
+                border: '1px solid var(--border)'
               }}>
-                Executed Positions
-                <div style={{ flex: 1, height: 1, background: 'var(--border)' }} />
-              </div>
-
-              <div style={{
-                background: 'var(--bg2)', border: '1px solid var(--border)',
-                borderRadius: 12, overflow: 'hidden'
-              }}>
-                {/* Table header */}
                 <div style={{
-                  display: 'grid',
-                  gridTemplateColumns: '1fr 80px 80px 80px 100px',
-                  padding: '10px 16px',
-                  borderBottom: '1px solid var(--border)',
-                  fontFamily: 'JetBrains Mono, monospace', fontSize: 9,
-                  color: 'var(--text-dim)', letterSpacing: 1,
-                  textTransform: 'uppercase'
+                  fontSize: 13, fontWeight: 600, marginBottom: 8,
+                  lineHeight: 1.3
                 }}>
-                  <span>Market</span>
-                  <span>Direction</span>
-                  <span>Edge</span>
-                  <span>Size</span>
-                  <span>Status</span>
+                  {t.question?.slice(0, 60)}{t.question?.length > 60 ? '...' : ''}
                 </div>
-
-                {executed.map((t, i) => {
-                  const md = t.market_data || {}
-                  const dec = t.decision || {}
-                  return (
-                    <div key={t.execution_id} style={{
-                      display: 'grid',
-                      gridTemplateColumns: '1fr 80px 80px 80px 100px',
-                      padding: '12px 16px',
-                      borderBottom: i < executed.length - 1 ? '1px solid var(--border)' : 'none',
-                      alignItems: 'center', transition: 'background 0.15s'
-                    }}
-                      onMouseEnter={e => e.currentTarget.style.background = 'var(--bg3)'}
-                      onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
-                    >
-                      <div style={{ fontSize: 12, fontWeight: 600, paddingRight: 16, lineHeight: 1.3 }}>
-                        {t.question?.slice(0, 55)}{t.question?.length > 55 ? '...' : ''}
-                      </div>
-                      <div style={{
-                        fontFamily: 'JetBrains Mono, monospace', fontSize: 10, fontWeight: 700,
-                        color: md.direction === 'YES' ? 'var(--green)' : 'var(--red)'
-                      }}>
-                        {md.direction || '—'}
-                      </div>
-                      <div style={{
-                        fontFamily: 'JetBrains Mono, monospace', fontSize: 10,
-                        color: md.edge >= 0 ? 'var(--green)' : 'var(--red)'
-                      }}>
-                        {md.edge ? `${md.edge >= 0 ? '+' : ''}${(md.edge * 100).toFixed(1)}%` : '—'}
-                      </div>
-                      <div style={{
-                        fontFamily: 'JetBrains Mono, monospace', fontSize: 10,
-                        color: 'var(--text)'
-                      }}>
-                        {dec.bet_size_usdc ? `$${dec.bet_size_usdc}` : '—'}
-                      </div>
-                      <div>
-                        <span style={{
-                          padding: '2px 8px', borderRadius: 20,
-                          fontFamily: 'JetBrains Mono, monospace', fontSize: 9, fontWeight: 600,
-                          background: 'var(--green-glow)', color: 'var(--green)',
-                          border: '1px solid rgba(52,211,153,0.2)'
-                        }}>{t.status}</span>
-                      </div>
-                    </div>
-                  )
-                })}
-              </div>
-            </div>
-          )}
-
-          {/* Skip reasons breakdown */}
-          {Object.keys(skipReasons).length > 0 && (
-            <div>
-              <div style={{
-                fontFamily: 'JetBrains Mono, monospace', fontSize: 10,
-                color: 'var(--text-muted)', letterSpacing: 2,
-                textTransform: 'uppercase', marginBottom: 14,
-                display: 'flex', alignItems: 'center', gap: 10
-              }}>
-                Skip Reasons
-                <div style={{ flex: 1, height: 1, background: 'var(--border)' }} />
-              </div>
-              <div style={{
-                background: 'var(--bg2)', border: '1px solid var(--border)',
-                borderRadius: 12, overflow: 'hidden'
-              }}>
-                {Object.entries(skipReasons).map(([reason, count], i, arr) => (
-                  <div key={reason} style={{
-                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                    padding: '12px 16px',
-                    borderBottom: i < arr.length - 1 ? '1px solid var(--border)' : 'none'
-                  }}>
+                <div style={{
+                  display: 'flex', gap: 8, alignItems: 'center',
+                  flexWrap: 'wrap'
+                }}>
+                  <span style={{
+                    padding: '3px 10px', borderRadius: 20,
+                    background: t.status === 'SIMULATED' ? 'var(--green-bg)' : 'var(--red-bg)',
+                    color: t.status === 'SIMULATED' ? 'var(--green)' : 'var(--red)',
+                    fontSize: 11, fontWeight: 600
+                  }}>{t.status}</span>
+                  {md.direction && (
                     <span style={{
-                      fontFamily: 'JetBrains Mono, monospace', fontSize: 11,
-                      color: 'var(--amber)'
-                    }}>{reason}</span>
+                      padding: '3px 10px', borderRadius: 20,
+                      background: md.direction === 'YES' ? 'var(--green-bg)' : 'var(--red-bg)',
+                      color: md.direction === 'YES' ? 'var(--green)' : 'var(--red)',
+                      fontSize: 11, fontWeight: 600
+                    }}>BUY {md.direction}</span>
+                  )}
+                  {dec.bet_size_usdc > 0 && (
+                    <span style={{ fontSize: 13, fontWeight: 700, color: '#fff' }}>
+                      ${dec.bet_size_usdc}
+                    </span>
+                  )}
+                  {md.edge && (
                     <span style={{
-                      fontFamily: 'JetBrains Mono, monospace', fontSize: 13,
-                      fontWeight: 700, color: 'var(--text)'
-                    }}>{count}</span>
-                  </div>
-                ))}
+                      fontSize: 12, color: md.edge >= 0 ? 'var(--green)' : 'var(--red)'
+                    }}>
+                      {md.edge >= 0 ? '+' : ''}{(md.edge * 100).toFixed(1)}%
+                    </span>
+                  )}
+                </div>
               </div>
-            </div>
-          )}
-
-          {/* Empty state */}
-          {executed.length === 0 && (
-            <div style={{
-              textAlign: 'center', padding: 60,
-              color: 'var(--text-muted)', fontFamily: 'JetBrains Mono, monospace', fontSize: 12
-            }}>
-              <div style={{ fontSize: 32, marginBottom: 12 }}>◈</div>
-              No positions yet. Run the agent to start.
-            </div>
-          )}
-        </>
+            )
+          })}
+        </div>
       )}
+
+      {/* Disconnect */}
+      <button
+        onClick={disconnect}
+        style={{
+          width: '100%', padding: '14px',
+          background: 'var(--bg2)', border: '1px solid var(--border)',
+          borderRadius: 14, color: 'var(--red)',
+          fontSize: 14, fontWeight: 600, cursor: 'pointer'
+        }}
+      >
+        Disconnect Wallet
+      </button>
     </div>
   )
 }
