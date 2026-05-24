@@ -1,11 +1,4 @@
-const traceStore = []
-
-const STATUS_TYPES = {
-  EXECUTED: 'EXECUTED',
-  SIMULATED: 'SIMULATED',
-  SKIPPED: 'SKIPPED',
-  INVALIDATED: 'INVALIDATED'
-}
+const { addTrace, getTraces, getStats } = require('../store')
 
 function logTrace(executionRecord, signals, scoreResult, edgeResult, riskResult) {
   const trace = {
@@ -15,6 +8,7 @@ function logTrace(executionRecord, signals, scoreResult, edgeResult, riskResult)
     question: executionRecord.question,
     status: executionRecord.status,
     reason: executionRecord.reason || null,
+    wallet_address: executionRecord.wallet_address || null,
 
     market_data: {
       implied_probability: executionRecord.implied_probability || null,
@@ -45,37 +39,13 @@ function logTrace(executionRecord, signals, scoreResult, edgeResult, riskResult)
     })),
 
     risk_checks: riskResult?.checks || [],
-
-    simulation: executionRecord.simulation,
+    simulation: true,
     tx_hash: executionRecord.tx_hash || null
   }
 
-  traceStore.push(trace)
+  addTrace(trace)
   console.log('[traceLogger] Logged ' + trace.status + ' — ' + trace.execution_id)
   return trace
 }
 
-function getTraces() {
-  return [...traceStore].reverse()
-}
-
-function getTraceById(executionId) {
-  return traceStore.find(t => t.execution_id === executionId) || null
-}
-
-function getStats() {
-  const total = traceStore.length
-  const executed = traceStore.filter(t => t.status === 'EXECUTED' || t.status === 'SIMULATED').length
-  const skipped = traceStore.filter(t => t.status === 'SKIPPED').length
-  const invalidated = traceStore.filter(t => t.status === 'INVALIDATED').length
-  const skipReasons = {}
-
-  traceStore.filter(t => t.status === 'SKIPPED').forEach(t => {
-    const r = t.reason || 'UNKNOWN'
-    skipReasons[r] = (skipReasons[r] || 0) + 1
-  })
-
-  return { total, executed, skipped, invalidated, skipReasons }
-}
-
-module.exports = { logTrace, getTraces, getTraceById, getStats }
+module.exports = { logTrace, getTraces, getStats }
