@@ -122,8 +122,10 @@ async function fetchMarkets() {
 
     // Score = liquidity weight + urgency weight
 filtered.sort((a, b) => {
-  const scoreA = (Math.log(a.liquidity + 1) * 0.4) + (1 / (a.days_to_close + 0.1) * 0.6)
-  const scoreB = (Math.log(b.liquidity + 1) * 0.4) + (1 / (b.days_to_close + 0.1) * 0.6)
+  const urgencyA = a.days_to_close < 7 ? 2 : a.days_to_close < 30 ? 1 : 0
+  const urgencyB = b.days_to_close < 7 ? 2 : b.days_to_close < 30 ? 1 : 0
+  const scoreA = Math.log(a.liquidity + 1) + urgencyA
+  const scoreB = Math.log(b.liquidity + 1) + urgencyB
   return scoreB - scoreA
 })
 
