@@ -15,7 +15,6 @@ async function getDB() {
   return db
 }
 
-// Traces
 async function addTrace(trace) {
   try {
     const database = await getDB()
@@ -60,7 +59,6 @@ async function getStats(address) {
   }
 }
 
-// Balances
 async function getBalance(address) {
   try {
     const database = await getDB()
@@ -85,7 +83,6 @@ async function setBalance(address, balance) {
   }
 }
 
-// Wallets
 async function getWallet(email) {
   try {
     const database = await getDB()
@@ -110,7 +107,6 @@ async function setWallet(email, walletData) {
   }
 }
 
-// Open Positions
 async function getOpenPositions(address) {
   try {
     const database = await getDB()
@@ -175,7 +171,6 @@ async function closePosition(address, market_id, exitPrice, pnl) {
       }
     )
 
-    // Update balance
     const currentBalance = await getBalance(address)
     const newBalance = Math.max(0, currentBalance + position.bet_size_usdc + pnl)
     await setBalance(address, newBalance)
