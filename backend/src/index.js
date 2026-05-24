@@ -1,6 +1,7 @@
 require('dotenv').config()
 const express = require('express')
 const cors = require('cors')
+const axios = require('axios')
 const { fetchMarkets } = require('./layers/marketFetcher')
 const { fetchNewsForMarket } = require('./layers/newsRetriever')
 const { extractSignalsForMarket } = require('./layers/signalExtractor')
@@ -10,7 +11,10 @@ const { checkRisk } = require('./layers/riskEngine')
 const { executeOrder, skipOrder } = require('./layers/executionLayer')
 const { logTrace, getTraces, getStats } = require('./layers/traceLogger')
 const { connectWallet, getOnchainData, recordExecution, recordSkip } = require('./circleWallet')
-const { getBalance, setBalance } = require('./store')
+const {
+  getBalance, setBalance, getOpenPositions, addPosition,
+  hasOpenPosition, closePosition, getAllPositions
+} = require('./store')
 
 const app = express()
 const PORT = process.env.PORT || 3001
@@ -41,7 +45,7 @@ app.post('/api/wallet/connect', async (req, res) => {
 app.get('/api/wallet/:address', async (req, res) => {
   try {
     const { address } = req.params
-    const virtualBalance = getBalance(address)
+    const virtualBalance = await getBalance(address)
     const onchain = await getOnchainData(address).catch(() => null)
     res.json({ onchain, virtualBalance })
   } catch (err) {
@@ -50,9 +54,10 @@ app.get('/api/wallet/:address', async (req, res) => {
 })
 
 // GET /api/wallet/:address/balance
-app.get('/api/wallet/:address/balance', (req, res) => {
+app.get('/api/wallet/:address/balance', async (req, res) => {
   const { address } = req.params
-  res.json({ address, virtualBalance: getBalance(address) })
+  const virtualBalance = await getBalance(address)
+  res.json({ address, virtualBalance })
 })
 
 // GET /api/markets
@@ -66,15 +71,102 @@ app.get('/api/markets', async (req, res) => {
 })
 
 // GET /api/traces
-app.get('/api/traces', (req, res) => {
+app.get('/api/traces', async (req, res) => {
   const { address } = req.query
-  const traces = getTraces(address)
+  const traces = await getTraces(address)
   res.json({ traces })
 })
 
 // GET /api/stats
-app.get('/api/stats', (req, res) => {
-  res.json(getStats())
+app.get('/api/stats', async (req, res) => {
+  const { address } = req.query
+  const stats = await getStats(address)
+  res.json(stats)
+})
+
+// GET /api/positions/:address
+app.get('/api/positions/:address', async (req, res) => {
+  try {
+    const { address } = req.params
+    const positions = await getAllPositions(address)
+
+    // Get live prices from Polymarket for open positions
+    const enriched = await Promise.all(positions.map(async (pos) => {
+      if (pos.status !== 'OPEN') return pos
+      try {
+        const response = await axios.get(
+          'https://gamma-api.polymarket.com/markets/' + pos.market_id,
+          { timeout: 5000 }
+        )
+        const market = response.data
+        const prices = JSON.parse(market.outcomePrices || '[]')
+        const outcomes = JSON.parse(market.outcomes || '[]')
+        const yesIndex = outcomes.findIndex(o => o.toLowerCase() === 'yes')
+        const currentYesPrice = yesIndex >= 0 ? parseFloat(prices[yesIndex]) : null
+        const currentPrice = pos.direction === 'YES' ? currentYesPrice : (currentYesPrice ? 1 - currentYesPrice : null)
+        const entryPrice = pos.direction === 'YES' ? pos.entry_price : 1 - pos.entry_price
+        const unrealizedPnl = currentPrice !== null
+          ? parseFloat(((currentPrice - entryPrice) * pos.bet_size_usdc).toFixed(2))
+          : null
+        return {
+          ...pos,
+          current_price: currentPrice,
+          unrealized_pnl: unrealizedPnl,
+          pnl_pct: currentPrice !== null
+            ? parseFloat(((currentPrice - entryPrice) / entryPrice * 100).toFixed(1))
+            : null
+        }
+      } catch {
+        return pos
+      }
+    }))
+
+    res.json({ positions: enriched })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// POST /api/positions/sell
+app.post('/api/positions/sell', async (req, res) => {
+  try {
+    const { address, market_id } = req.body
+    if (!address || !market_id) return res.status(400).json({ error: 'address and market_id required' })
+
+    // Get current market price
+    const response = await axios.get(
+      'https://gamma-api.polymarket.com/markets/' + market_id,
+      { timeout: 5000 }
+    )
+    const market = response.data
+    const prices = JSON.parse(market.outcomePrices || '[]')
+    const outcomes = JSON.parse(market.outcomes || '[]')
+    const yesIndex = outcomes.findIndex(o => o.toLowerCase() === 'yes')
+    const currentYesPrice = yesIndex >= 0 ? parseFloat(prices[yesIndex]) : 0.5
+
+    // Get position
+    const positions = await getAllPositions(address)
+    const position = positions.find(p => p.market_id === market_id && p.status === 'OPEN')
+    if (!position) return res.status(404).json({ error: 'Position not found' })
+
+    const currentPrice = position.direction === 'YES' ? currentYesPrice : 1 - currentYesPrice
+    const entryPrice = position.direction === 'YES' ? position.entry_price : 1 - position.entry_price
+    const pnl = parseFloat(((currentPrice - entryPrice) * position.bet_size_usdc).toFixed(2))
+
+    const result = await closePosition(address, market_id, currentPrice, pnl)
+    if (!result) return res.status(500).json({ error: 'Failed to close position' })
+
+    res.json({
+      success: true,
+      pnl,
+      newBalance: result.newBalance,
+      message: pnl >= 0
+        ? `Sold for +$${pnl.toFixed(2)} profit`
+        : `Sold for -$${Math.abs(pnl).toFixed(2)} loss`
+    })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
 })
 
 // GET /api/run/status
@@ -92,85 +184,96 @@ app.post('/api/run', async (req, res) => {
   }
 
   res.json({ message: 'Agent started', running: true })
-
   agentRunning[address] = true
 
   setImmediate(async () => {
     try {
-      const portfolioValue = getBalance(address || 'default')
-      const openPositions = []
+      const portfolioValue = await getBalance(address || 'default')
+      const openPositions = await getOpenPositions(address)
       const markets = await fetchMarkets()
 
-      console.log('[run] Starting agent for', address, '— portfolio:', portfolioValue)
-      console.log('[run] Markets to process:', markets.slice(0, 15).length)
+      // Build diverse sample — max 3 per category
+      const categoryBuckets = {}
+      for (const market of markets) {
+        const cat = market.category || 'Other'
+        if (!categoryBuckets[cat]) categoryBuckets[cat] = []
+        if (categoryBuckets[cat].length < 3) categoryBuckets[cat].push(market)
+      }
+      const diverseMarkets = Object.values(categoryBuckets).flat().slice(0, 20)
+      console.log('[run] Starting agent for', address, '— portfolio: $' + portfolioValue)
+      console.log('[run] Categories:', [...new Set(diverseMarkets.map(m => m.category))].join(', '))
 
-      // Build diverse market sample across categories
-const categoryBuckets = {}
-for (const market of markets) {
-  const cat = market.category || 'Other'
-  if (!categoryBuckets[cat]) categoryBuckets[cat] = []
-  if (categoryBuckets[cat].length < 3) categoryBuckets[cat].push(market)
-}
-const diverseMarkets = Object.values(categoryBuckets).flat().slice(0, 20)
-console.log('[run] Diverse sample:', diverseMarkets.map(m => m.category).join(', '))
-
-for (const market of diverseMarkets) {
+      for (const market of diverseMarkets) {
         try {
-          const articles = await fetchNewsForMarket(market)
+          // Skip if already have open position on this market
+          const alreadyOpen = await hasOpenPosition(address, market.market_id)
+          if (alreadyOpen) {
+            console.log('[run] Already have position on:', market.question.slice(0, 40))
+            continue
+          }
 
+          const articles = await fetchNewsForMarket(market)
           if (articles.length === 0) {
             const rec = await skipOrder(market, 'NO_ARTICLES', null, null)
             rec.wallet_address = address
-            logTrace(rec, [], { score: 0, signal_count: 0 }, null, null)
+            await logTrace(rec, [], { score: 0, signal_count: 0 }, null, null)
             continue
           }
 
           const signals = await extractSignalsForMarket(market, articles)
           const scoreResult = computeScore(signals)
-
-          console.log('[run] Market:', market.question.slice(0, 40), '| Score:', scoreResult.score, '| Signals:', scoreResult.signal_count)
+          console.log('[run]', market.question.slice(0, 40), '| Score:', scoreResult.score, '| Signals:', scoreResult.signal_count)
 
           const edgeResult = calculateEdge(market, scoreResult, [])
-
-          console.log('[run] Edge result:', edgeResult.action, '| Edge:', edgeResult.edge, '| Adjusted:', edgeResult.adjusted_edge)
+          console.log('[run] Edge:', edgeResult.action, '| Raw:', edgeResult.edge, '| Adj:', edgeResult.adjusted_edge)
 
           if (edgeResult.action === 'SKIP') {
             const rec = await skipOrder(market, edgeResult.reason, scoreResult, edgeResult)
             rec.wallet_address = address
-            logTrace(rec, signals, scoreResult, edgeResult, null)
+            await logTrace(rec, signals, scoreResult, edgeResult, null)
             recordSkip(address, edgeResult.reason).catch(() => {})
             continue
           }
 
-          const currentBalance = getBalance(address || 'default')
-          const riskResult = checkRisk(market, edgeResult, openPositions, currentBalance)
+          const currentBalance = await getBalance(address || 'default')
+          const openPos = await getOpenPositions(address)
+          const riskResult = checkRisk(market, edgeResult, openPos, currentBalance)
 
           if (riskResult.action === 'SKIP') {
             const rec = await skipOrder(market, riskResult.reason, scoreResult, edgeResult)
             rec.wallet_address = address
-            logTrace(rec, signals, scoreResult, edgeResult, riskResult)
+            await logTrace(rec, signals, scoreResult, edgeResult, riskResult)
             recordSkip(address, riskResult.reason).catch(() => {})
             continue
           }
 
           const rec = await executeOrder(market, edgeResult, riskResult)
           rec.wallet_address = address
-          logTrace(rec, signals, scoreResult, edgeResult, riskResult)
+          await logTrace(rec, signals, scoreResult, edgeResult, riskResult)
 
-          // Persist balance
-          const bal = getBalance(address || 'default')
+          // Save position to MongoDB
+          await addPosition({
+            wallet_address: address,
+            market_id: market.market_id,
+            question: market.question,
+            direction: riskResult.direction,
+            entry_price: edgeResult.implied_probability,
+            model_probability: edgeResult.model_probability,
+            bet_size_usdc: riskResult.kelly.bet_size_usdc,
+            cluster_key: riskResult.cluster_key,
+            category: market.category,
+            edge: edgeResult.edge,
+            days_to_close: market.days_to_close
+          })
+
+          // Deduct from balance
+          const bal = await getBalance(address || 'default')
           const newBal = Math.max(0, bal - riskResult.kelly.bet_size_usdc)
-          setBalance(address || 'default', newBal)
+          await setBalance(address || 'default', newBal)
 
           recordExecution(address, riskResult.kelly.bet_size_usdc, riskResult.direction).catch(() => {})
 
-          openPositions.push({
-            market_id: market.market_id,
-            cluster_key: riskResult.cluster_key,
-            size_fraction: riskResult.kelly.capped_fraction
-          })
-
-          console.log('[run] EXECUTED:', market.question.slice(0, 40), '| $' + riskResult.kelly.bet_size_usdc + ' | Balance now: $' + newBal)
+          console.log('[run] EXECUTED:', market.question.slice(0, 40), '| $' + riskResult.kelly.bet_size_usdc + ' | Balance: $' + newBal)
 
         } catch (marketErr) {
           console.error('[run] Market error:', marketErr.message)
