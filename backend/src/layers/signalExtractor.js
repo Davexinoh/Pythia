@@ -39,7 +39,7 @@ async function groqWithRetry(payload, retries = 3) {
     } catch (err) {
       if (err.response?.status === 429) {
         // Rate limited — wait and retry
-        const waitMs = Math.pow(2, attempt) * 2000 // 2s, 4s, 8s
+        const waitMs = Math.pow(2, attempt) * 500 // 2s, 4s, 8s
         console.log('[signalExtractor] Rate limited, waiting ' + waitMs + 'ms before retry ' + (attempt + 1))
         await new Promise(r => setTimeout(r, waitMs))
         continue
@@ -61,7 +61,7 @@ Extract the signal JSON now:`
 
   try {
     const response = await groqWithRetry({
-      model: 'llama-3.3-70b-versatile',
+      model: 'llama-3.1-8b-instant',
       messages: [
         { role: 'system', content: SYSTEM_PROMPT },
         { role: 'user', content: userPrompt }
@@ -93,7 +93,7 @@ async function extractSignalsForMarket(market, articles) {
   const signals = []
 
   // Process max 5 articles per market to save rate limit budget
-  const limited = articles.slice(0, 5)
+  const limited = articles.slice(0, 3)
 
   for (const article of limited) {
     const raw = await extractSignal(market, article)
@@ -127,8 +127,8 @@ async function extractSignalsForMarket(market, articles) {
       article_title: article.title
     })
 
-    // Throttle between articles — 800ms gap
-    await new Promise(r => setTimeout(r, 800))
+    // Throttle between articles — 300ms gap
+    await new Promise(r => setTimeout(r, 300))
   }
 
   console.log('[signalExtractor] "' + market.question.slice(0, 40) + '..." → ' + signals.length + '/' + limited.length + ' signals valid')
