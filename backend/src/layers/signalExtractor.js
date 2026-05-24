@@ -13,45 +13,61 @@ You MUST respond with ONLY a valid JSON object. No explanation, no markdown, no 
 The JSON must have exactly these fields:
 - signal_type: one of ["regulatory", "liquidity", "media_amplification", "event_proximity"]
 - sentiment: one of ["YES", "NO", "NEUTRAL"]
-- entity: the main entity involved (person, company, or event) as a lowercase string
-- event_type: a short lowercase description of the event category (e.g. "product_release", "policy_decision", "legal_ruling")
+- entity: the main entity involved as a lowercase string
+- event_type: a short lowercase description (e.g. "product_release", "policy_decision")
 - freshness_hours: copy the published_hours_ago value from the article metadata
 
 Signal type definitions:
 - regulatory: government, legal, or institutional decisions
 - liquidity: market movement, trading, financial indicators
-- media_amplification: viral/high-coverage news (use this when unsure)
+- media_amplification: viral/high-coverage news
 - event_proximity: news directly about the event the market resolves on
 
-Sentiment definitions:
-- YES: article increases probability the market resolves YES
-- NO: article decreases probability
-- NEUTRAL: tangentially related but does not shift probability`
+Sentiment: YES increases probability of YES resolution, NO decreases it, NEUTRAL is tangential`
+
+async function groqWithRetry(payload, retries = 3) {
+  for (let attempt = 0; attempt < retries; attempt++) {
+    try {
+      const response = await axios.post(GROQ_API_URL, payload, {
+        headers: {
+          'Authorization': 'Bearer ' + process.env.GROQ_API_KEY,
+          'Content-Type': 'application/json'
+        },
+        timeout: 15000
+      })
+      return response
+    } catch (err) {
+      if (err.response?.status === 429) {
+        // Rate limited — wait and retry
+        const waitMs = Math.pow(2, attempt) * 2000 // 2s, 4s, 8s
+        console.log('[signalExtractor] Rate limited, waiting ' + waitMs + 'ms before retry ' + (attempt + 1))
+        await new Promise(r => setTimeout(r, waitMs))
+        continue
+      }
+      throw err
+    }
+  }
+  throw new Error('Max retries exceeded')
+}
 
 async function extractSignal(market, article) {
   const userPrompt = `Market question: "${market.question}"
 
 Article title: "${article.title}"
-Article text: "${article.text.slice(0, 800)}"
+Article text: "${article.text.slice(0, 600)}"
 Published hours ago: ${article.published_hours_ago}
 
 Extract the signal JSON now:`
 
   try {
-    const response = await axios.post(GROQ_API_URL, {
+    const response = await groqWithRetry({
       model: 'llama-3.3-70b-versatile',
       messages: [
         { role: 'system', content: SYSTEM_PROMPT },
         { role: 'user', content: userPrompt }
       ],
       temperature: 0.1,
-      max_tokens: 200
-    }, {
-      headers: {
-        'Authorization': 'Bearer ' + process.env.GROQ_API_KEY,
-        'Content-Type': 'application/json'
-      },
-      timeout: 15000
+      max_tokens: 150
     })
 
     const raw = response.data?.choices?.[0]?.message?.content || ''
@@ -61,18 +77,14 @@ Extract the signal JSON now:`
     try {
       parsed = JSON.parse(cleaned)
     } catch {
-      console.error('[signalExtractor] JSON parse failed for market ' + market.market_id + ':', cleaned.slice(0, 100))
+      console.error('[signalExtractor] JSON parse failed:', cleaned.slice(0, 80))
       return null
     }
 
     return parsed
 
   } catch (err) {
-    if (err.response) {
-      console.error('[signalExtractor] Groq API error ' + err.response.status)
-    } else {
-      console.error('[signalExtractor] Error:', err.message)
-    }
+    console.error('[signalExtractor] Error:', err.message)
     return null
   }
 }
@@ -80,7 +92,10 @@ Extract the signal JSON now:`
 async function extractSignalsForMarket(market, articles) {
   const signals = []
 
-  for (const article of articles) {
+  // Process max 5 articles per market to save rate limit budget
+  const limited = articles.slice(0, 5)
+
+  for (const article of limited) {
     const raw = await extractSignal(market, article)
     if (!raw) continue
 
@@ -99,7 +114,7 @@ async function extractSignalsForMarket(market, articles) {
 
     const freshness = parseFloat(raw.freshness_hours)
     if (isNaN(freshness) || freshness < 0) {
-      console.log('[signalExtractor] INVALIDATED — invalid freshness_hours:', raw.freshness_hours)
+      console.log('[signalExtractor] INVALIDATED — invalid freshness')
       continue
     }
 
@@ -112,10 +127,11 @@ async function extractSignalsForMarket(market, articles) {
       article_title: article.title
     })
 
-    await new Promise(r => setTimeout(r, 200))
+    // Throttle between articles — 800ms gap
+    await new Promise(r => setTimeout(r, 800))
   }
 
-  console.log('[signalExtractor] "' + market.question.slice(0, 40) + '..." → ' + signals.length + '/' + articles.length + ' signals valid')
+  console.log('[signalExtractor] "' + market.question.slice(0, 40) + '..." → ' + signals.length + '/' + limited.length + ' signals valid')
   return signals
 }
 
