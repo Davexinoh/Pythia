@@ -104,7 +104,17 @@ app.post('/api/run', async (req, res) => {
       console.log('[run] Starting agent for', address, '— portfolio:', portfolioValue)
       console.log('[run] Markets to process:', markets.slice(0, 15).length)
 
-      for (const market of markets.slice(0, 15)) {
+      // Build diverse market sample across categories
+const categoryBuckets = {}
+for (const market of markets) {
+  const cat = market.category || 'Other'
+  if (!categoryBuckets[cat]) categoryBuckets[cat] = []
+  if (categoryBuckets[cat].length < 3) categoryBuckets[cat].push(market)
+}
+const diverseMarkets = Object.values(categoryBuckets).flat().slice(0, 20)
+console.log('[run] Diverse sample:', diverseMarkets.map(m => m.category).join(', '))
+
+for (const market of diverseMarkets) {
         try {
           const articles = await fetchNewsForMarket(market)
 
