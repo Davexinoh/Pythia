@@ -62,7 +62,7 @@ async function createWalletForEmail(email) {
     createdAt: new Date().toISOString()
   }
 
-  setWallet(email, walletData)
+  await setWallet(email, walletData)
   return walletData
 }
 
@@ -76,7 +76,7 @@ async function registerOnContract(address) {
     }
     const tx = await contract.registerWallet(address, { gasLimit: 300000 })
     await tx.wait()
-    console.log('[circleWallet] Registered onchain:', address, 'tx:', tx.hash)
+    console.log('[circleWallet] Registered onchain:', address)
     return true
   } catch (err) {
     console.error('[circleWallet] Contract registration failed:', err.message)
@@ -106,22 +106,21 @@ async function connectWallet(email) {
   if (!email || !email.includes('@')) throw new Error('Invalid email address')
 
   const normalizedEmail = email.toLowerCase().trim()
-  let walletData = getWallet(normalizedEmail)
+  let walletData = await getWallet(normalizedEmail)
   let isNew = false
 
   if (!walletData) {
     console.log('[circleWallet] New user, creating wallet for:', normalizedEmail)
     walletData = await createWalletForEmail(normalizedEmail)
     isNew = true
+    await setBalance(walletData.address, 1000)
   } else {
     console.log('[circleWallet] Returning user:', normalizedEmail)
   }
 
-  // Try to register onchain — non-blocking
   registerOnContract(walletData.address).catch(() => {})
 
-  // Get balance from file store (persists across restarts)
-  const virtualBalance = getBalance(walletData.address)
+  const virtualBalance = await getBalance(walletData.address)
 
   return {
     isNew,
@@ -141,7 +140,6 @@ async function recordExecution(address, betSizeUsdc, direction) {
       address, betSizeOnchain, direction, { gasLimit: 200000 }
     )
     await tx.wait()
-    console.log('[circleWallet] Execution recorded onchain for:', address)
     return tx.hash
   } catch (err) {
     console.error('[circleWallet] Failed to record execution:', err.message)
