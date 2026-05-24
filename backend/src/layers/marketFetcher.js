@@ -120,7 +120,12 @@ async function fetchMarkets() {
       })
     }
 
-    filtered.sort((a, b) => b.volume - a.volume)
+    // Score = liquidity weight + urgency weight
+filtered.sort((a, b) => {
+  const scoreA = (Math.log(a.liquidity + 1) * 0.4) + (1 / (a.days_to_close + 0.1) * 0.6)
+  const scoreB = (Math.log(b.liquidity + 1) * 0.4) + (1 / (b.days_to_close + 0.1) * 0.6)
+  return scoreB - scoreA
+})
 
     console.log('[marketFetcher] Fetched ' + raw.length + ' raw → ' + filtered.length + ' passed filters')
     return filtered
