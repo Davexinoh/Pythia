@@ -1,6 +1,6 @@
 const { addTrace, getTraces, getStats } = require('../store')
 
-function logTrace(executionRecord, signals, scoreResult, edgeResult, riskResult) {
+async function logTrace(executionRecord, signals, scoreResult, edgeResult, riskResult) {
   const trace = {
     execution_id: executionRecord.execution_id,
     timestamp: executionRecord.timestamp,
@@ -43,7 +43,7 @@ function logTrace(executionRecord, signals, scoreResult, edgeResult, riskResult)
     tx_hash: executionRecord.tx_hash || null
   }
 
-  addTrace(trace)
+  await addTrace(trace)
   console.log('[traceLogger] Logged ' + trace.status + ' — ' + trace.execution_id)
   return trace
 }
