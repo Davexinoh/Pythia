@@ -2,7 +2,7 @@ const { initiateDeveloperControlledWalletsClient } = require('@circle-fin/develo
 const { ethers } = require('ethers')
 const fs = require('fs')
 const path = require('path')
-const { getWallet, setWallet, getBalance } = require('./store')
+const { getWallet, setWallet, getBalance, setBalance } = require('./store')
 
 const client = initiateDeveloperControlledWalletsClient({
   apiKey: process.env.CIRCLE_API_KEY,
