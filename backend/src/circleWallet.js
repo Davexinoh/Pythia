@@ -2,6 +2,7 @@ const { initiateDeveloperControlledWalletsClient } = require('@circle-fin/develo
 const { ethers } = require('ethers')
 const fs = require('fs')
 const path = require('path')
+const { getWallet, setWallet, getBalance } = require('./store')
 
 const client = initiateDeveloperControlledWalletsClient({
   apiKey: process.env.CIRCLE_API_KEY,
@@ -32,7 +33,6 @@ function getContract() {
 }
 
 let walletSetId = process.env.CIRCLE_WALLET_SET_ID || null
-const emailWalletMap = {}
 
 async function getOrCreateWalletSet() {
   if (walletSetId) return walletSetId
@@ -40,10 +40,6 @@ async function getOrCreateWalletSet() {
   walletSetId = response.data?.walletSet?.id
   console.log('[circleWallet] Created wallet set:', walletSetId)
   return walletSetId
-}
-
-async function getWalletByEmail(email) {
-  return emailWalletMap[email.toLowerCase()] || null
 }
 
 async function createWalletForEmail(email) {
@@ -59,14 +55,15 @@ async function createWalletForEmail(email) {
   const wallet = response.data?.wallets?.[0]
   if (!wallet) throw new Error('Wallet creation failed')
 
-  emailWalletMap[email.toLowerCase()] = {
+  const walletData = {
     walletId: wallet.id,
     address: wallet.address,
     email: email.toLowerCase(),
     createdAt: new Date().toISOString()
   }
 
-  return emailWalletMap[email.toLowerCase()]
+  setWallet(email, walletData)
+  return walletData
 }
 
 async function registerOnContract(address) {
@@ -77,7 +74,6 @@ async function registerOnContract(address) {
       console.log('[circleWallet] Already registered onchain:', address)
       return false
     }
-    // Owner registers on behalf of user
     const tx = await contract.registerWallet(address, { gasLimit: 300000 })
     await tx.wait()
     console.log('[circleWallet] Registered onchain:', address, 'tx:', tx.hash)
@@ -107,12 +103,10 @@ async function getOnchainData(address) {
 }
 
 async function connectWallet(email) {
-  if (!email || !email.includes('@')) {
-    throw new Error('Invalid email address')
-  }
+  if (!email || !email.includes('@')) throw new Error('Invalid email address')
 
   const normalizedEmail = email.toLowerCase().trim()
-  let walletData = await getWalletByEmail(normalizedEmail)
+  let walletData = getWallet(normalizedEmail)
   let isNew = false
 
   if (!walletData) {
@@ -123,22 +117,18 @@ async function connectWallet(email) {
     console.log('[circleWallet] Returning user:', normalizedEmail)
   }
 
-  let onchain = await getOnchainData(walletData.address)
+  // Try to register onchain — non-blocking
+  registerOnContract(walletData.address).catch(() => {})
 
-  if (!onchain || !onchain.registered) {
-    await registerOnContract(walletData.address)
-    onchain = await getOnchainData(walletData.address)
-  }
+  // Get balance from file store (persists across restarts)
+  const virtualBalance = getBalance(walletData.address)
 
   return {
     isNew,
     email: normalizedEmail,
     walletId: walletData.walletId,
     address: walletData.address,
-    virtualBalance: onchain?.virtualBalance || 1000,
-    totalExecutions: onchain?.totalExecutions || 0,
-    totalSkips: onchain?.totalSkips || 0,
-    registeredAt: onchain?.registeredAt || Date.now() / 1000,
+    virtualBalance,
     createdAt: walletData.createdAt
   }
 }
@@ -164,7 +154,6 @@ async function recordSkip(address, reason) {
     const contract = getContract()
     const tx = await contract.recordSkip(address, reason, { gasLimit: 200000 })
     await tx.wait()
-    console.log('[circleWallet] Skip recorded onchain for:', address)
     return tx.hash
   } catch (err) {
     console.error('[circleWallet] Failed to record skip:', err.message)
