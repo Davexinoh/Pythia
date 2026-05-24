@@ -10,19 +10,14 @@ const { checkRisk } = require('./layers/riskEngine')
 const { executeOrder, skipOrder } = require('./layers/executionLayer')
 const { logTrace, getTraces, getStats } = require('./layers/traceLogger')
 const { connectWallet, getOnchainData, recordExecution, recordSkip } = require('./circleWallet')
+const { getBalance, setBalance } = require('./store')
 
 const app = express()
 const PORT = process.env.PORT || 3001
+const agentRunning = {}
 
 app.use(cors({ origin: process.env.FRONTEND_URL || 'http://localhost:5173' }))
 app.use(express.json())
-
-const walletPortfolios = {}
-const agentRunning = {}
-
-function getPortfolioValue(address) {
-  return walletPortfolios[address] !== undefined ? walletPortfolios[address] : 1000
-}
 
 // GET /api/health
 app.get('/api/health', (req, res) => {
@@ -35,10 +30,7 @@ app.post('/api/wallet/connect', async (req, res) => {
     const { email } = req.body
     if (!email) return res.status(400).json({ error: 'Email required' })
     const wallet = await connectWallet(email)
-    if (walletPortfolios[wallet.address] === undefined) {
-      walletPortfolios[wallet.address] = wallet.virtualBalance
-    }
-    res.json({ wallet: { ...wallet, virtualBalance: walletPortfolios[wallet.address] } })
+    res.json({ wallet })
   } catch (err) {
     console.error('[/api/wallet/connect]', err.message)
     res.status(500).json({ error: err.message })
@@ -49,10 +41,8 @@ app.post('/api/wallet/connect', async (req, res) => {
 app.get('/api/wallet/:address', async (req, res) => {
   try {
     const { address } = req.params
-    const onchain = await getOnchainData(address)
-    const virtualBalance = walletPortfolios[address] !== undefined
-      ? walletPortfolios[address]
-      : onchain?.virtualBalance || 1000
+    const virtualBalance = getBalance(address)
+    const onchain = await getOnchainData(address).catch(() => null)
     res.json({ onchain, virtualBalance })
   } catch (err) {
     res.status(500).json({ error: err.message })
@@ -62,7 +52,7 @@ app.get('/api/wallet/:address', async (req, res) => {
 // GET /api/wallet/:address/balance
 app.get('/api/wallet/:address/balance', (req, res) => {
   const { address } = req.params
-  res.json({ address, virtualBalance: walletPortfolios[address] || 1000 })
+  res.json({ address, virtualBalance: getBalance(address) })
 })
 
 // GET /api/markets
@@ -78,11 +68,8 @@ app.get('/api/markets', async (req, res) => {
 // GET /api/traces
 app.get('/api/traces', (req, res) => {
   const { address } = req.query
-  const traces = getTraces()
-  const filtered = address
-    ? traces.filter(t => t.wallet_address === address)
-    : traces
-  res.json({ traces: filtered })
+  const traces = getTraces(address)
+  res.json({ traces })
 })
 
 // GET /api/stats
@@ -96,7 +83,7 @@ app.get('/api/run/status', (req, res) => {
   res.json({ running: agentRunning[address] || false })
 })
 
-// POST /api/run — returns immediately, runs in background
+// POST /api/run
 app.post('/api/run', async (req, res) => {
   const { address } = req.body
 
@@ -104,78 +91,90 @@ app.post('/api/run', async (req, res) => {
     return res.json({ message: 'Agent already running', running: true })
   }
 
-  // Return immediately — don't wait
   res.json({ message: 'Agent started', running: true })
 
-  // Run in background
   agentRunning[address] = true
 
-  try {
-    const portfolioValue = walletPortfolios[address] || 1000
-    const openPositions = []
-    const markets = await fetchMarkets()
+  setImmediate(async () => {
+    try {
+      const portfolioValue = getBalance(address || 'default')
+      const openPositions = []
+      const markets = await fetchMarkets()
 
-    for (const market of markets.slice(0, 15)) {
-      try {
-        const articles = await fetchNewsForMarket(market)
+      console.log('[run] Starting agent for', address, '— portfolio:', portfolioValue)
+      console.log('[run] Markets to process:', markets.slice(0, 15).length)
 
-        if (articles.length === 0) {
-          const rec = await skipOrder(market, 'NO_ARTICLES', null, null)
-          rec.wallet_address = address
-          logTrace(rec, [], { score: 0, signal_count: 0 }, null, null)
-          continue
-        }
+      for (const market of markets.slice(0, 15)) {
+        try {
+          const articles = await fetchNewsForMarket(market)
 
-        const signals = await extractSignalsForMarket(market, articles)
-        const scoreResult = computeScore(signals)
-        const edgeResult = calculateEdge(market, scoreResult, [])
+          if (articles.length === 0) {
+            const rec = await skipOrder(market, 'NO_ARTICLES', null, null)
+            rec.wallet_address = address
+            logTrace(rec, [], { score: 0, signal_count: 0 }, null, null)
+            continue
+          }
 
-        if (edgeResult.action === 'SKIP') {
-          const rec = await skipOrder(market, edgeResult.reason, scoreResult, edgeResult)
-          rec.wallet_address = address
-          logTrace(rec, signals, scoreResult, edgeResult, null)
-          if (address) recordSkip(address, edgeResult.reason).catch(() => {})
-          continue
-        }
+          const signals = await extractSignalsForMarket(market, articles)
+          const scoreResult = computeScore(signals)
 
-        const currentBalance = walletPortfolios[address] || 1000
-        const riskResult = checkRisk(market, edgeResult, openPositions, currentBalance)
+          console.log('[run] Market:', market.question.slice(0, 40), '| Score:', scoreResult.score, '| Signals:', scoreResult.signal_count)
 
-        if (riskResult.action === 'SKIP') {
-          const rec = await skipOrder(market, riskResult.reason, scoreResult, edgeResult)
+          const edgeResult = calculateEdge(market, scoreResult, [])
+
+          console.log('[run] Edge result:', edgeResult.action, '| Edge:', edgeResult.edge, '| Adjusted:', edgeResult.adjusted_edge)
+
+          if (edgeResult.action === 'SKIP') {
+            const rec = await skipOrder(market, edgeResult.reason, scoreResult, edgeResult)
+            rec.wallet_address = address
+            logTrace(rec, signals, scoreResult, edgeResult, null)
+            recordSkip(address, edgeResult.reason).catch(() => {})
+            continue
+          }
+
+          const currentBalance = getBalance(address || 'default')
+          const riskResult = checkRisk(market, edgeResult, openPositions, currentBalance)
+
+          if (riskResult.action === 'SKIP') {
+            const rec = await skipOrder(market, riskResult.reason, scoreResult, edgeResult)
+            rec.wallet_address = address
+            logTrace(rec, signals, scoreResult, edgeResult, riskResult)
+            recordSkip(address, riskResult.reason).catch(() => {})
+            continue
+          }
+
+          const rec = await executeOrder(market, edgeResult, riskResult)
           rec.wallet_address = address
           logTrace(rec, signals, scoreResult, edgeResult, riskResult)
-          if (address) recordSkip(address, riskResult.reason).catch(() => {})
+
+          // Persist balance
+          const bal = getBalance(address || 'default')
+          const newBal = Math.max(0, bal - riskResult.kelly.bet_size_usdc)
+          setBalance(address || 'default', newBal)
+
+          recordExecution(address, riskResult.kelly.bet_size_usdc, riskResult.direction).catch(() => {})
+
+          openPositions.push({
+            market_id: market.market_id,
+            cluster_key: riskResult.cluster_key,
+            size_fraction: riskResult.kelly.capped_fraction
+          })
+
+          console.log('[run] EXECUTED:', market.question.slice(0, 40), '| $' + riskResult.kelly.bet_size_usdc + ' | Balance now: $' + newBal)
+
+        } catch (marketErr) {
+          console.error('[run] Market error:', marketErr.message)
           continue
         }
-
-        const rec = await executeOrder(market, edgeResult, riskResult)
-        rec.wallet_address = address
-        logTrace(rec, signals, scoreResult, edgeResult, riskResult)
-
-        if (address) {
-          const bal = walletPortfolios[address] || 1000
-          walletPortfolios[address] = Math.max(0, bal - riskResult.kelly.bet_size_usdc)
-          recordExecution(address, riskResult.kelly.bet_size_usdc, riskResult.direction).catch(() => {})
-        }
-
-        openPositions.push({
-          market_id: market.market_id,
-          cluster_key: riskResult.cluster_key,
-          size_fraction: riskResult.kelly.capped_fraction
-        })
-
-      } catch (marketErr) {
-        console.error('[run] Market error:', marketErr.message)
-        continue
       }
+
+      console.log('[run] Agent finished for:', address)
+    } catch (err) {
+      console.error('[run] Fatal error:', err.message)
+    } finally {
+      agentRunning[address] = false
     }
-  } catch (err) {
-    console.error('[run] Fatal error:', err.message)
-  } finally {
-    agentRunning[address] = false
-    console.log('[run] Agent finished for:', address)
-  }
+  })
 })
 
 app.listen(PORT, () => {
