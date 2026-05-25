@@ -23,6 +23,121 @@ const agentRunning = {}
 app.use(cors({ origin: process.env.FRONTEND_URL || 'http://localhost:5173' }))
 app.use(express.json())
 
+async function runAgentForWallet(address) {
+  console.log('[run] ========= AGENT START =========')
+  console.log('[run] Address:', address)
+
+  try {
+    const portfolioValue = await getBalance(address || 'default').catch(() => 1000)
+    console.log('[run] Portfolio: $' + portfolioValue)
+
+    const markets = await fetchMarkets()
+    console.log('[run] Markets fetched:', markets.length)
+
+    if (!markets || markets.length === 0) {
+      console.log('[run] No markets — aborting')
+      return
+    }
+
+    // Build diverse sample
+    const categoryBuckets = {}
+    for (const market of markets) {
+      const cat = market.category || 'Other'
+      if (!categoryBuckets[cat]) categoryBuckets[cat] = []
+      if (categoryBuckets[cat].length < 3) categoryBuckets[cat].push(market)
+    }
+    const diverseMarkets = Object.values(categoryBuckets).flat().slice(0, 20)
+    console.log('[run] Categories:', [...new Set(diverseMarkets.map(m => m.category))].join(', '))
+    console.log('[run] Processing:', diverseMarkets.length, 'markets')
+
+    for (const market of diverseMarkets) {
+      try {
+        console.log('[run] --- Market:', market.question.slice(0, 50))
+
+        const alreadyOpen = await hasOpenPosition(address, market.market_id).catch(() => false)
+        if (alreadyOpen) {
+          console.log('[run] Already open — skip')
+          continue
+        }
+
+        const articles = await fetchNewsForMarket(market)
+        console.log('[run] Articles:', articles.length)
+
+        if (articles.length === 0) {
+          const rec = await skipOrder(market, 'NO_ARTICLES', null, null)
+          rec.wallet_address = address
+          await logTrace(rec, [], { score: 0, signal_count: 0 }, null, null)
+          continue
+        }
+
+        const signals = await extractSignalsForMarket(market, articles)
+        const scoreResult = computeScore(signals)
+        console.log('[run] Score:', scoreResult.score, '| Signals:', scoreResult.signal_count)
+
+        const edgeResult = calculateEdge(market, scoreResult, [])
+        console.log('[run] Edge action:', edgeResult.action, '| Edge:', edgeResult.edge)
+
+        if (edgeResult.action === 'SKIP') {
+          const rec = await skipOrder(market, edgeResult.reason, scoreResult, edgeResult)
+          rec.wallet_address = address
+          await logTrace(rec, signals, scoreResult, edgeResult, null)
+          recordSkip(address, edgeResult.reason).catch(() => {})
+          continue
+        }
+
+        const currentBalance = await getBalance(address || 'default').catch(() => portfolioValue)
+        const openPos = await getOpenPositions(address).catch(() => [])
+        const riskResult = checkRisk(market, edgeResult, openPos, currentBalance)
+        console.log('[run] Risk:', riskResult.action, '| Bet: $' + riskResult.kelly.bet_size_usdc)
+
+        if (riskResult.action === 'SKIP') {
+          const rec = await skipOrder(market, riskResult.reason, scoreResult, edgeResult)
+          rec.wallet_address = address
+          await logTrace(rec, signals, scoreResult, edgeResult, riskResult)
+          recordSkip(address, riskResult.reason).catch(() => {})
+          continue
+        }
+
+        const rec = await executeOrder(market, edgeResult, riskResult)
+        rec.wallet_address = address
+        await logTrace(rec, signals, scoreResult, edgeResult, riskResult)
+
+        await addPosition({
+          wallet_address: address,
+          market_id: market.market_id,
+          question: market.question,
+          direction: riskResult.direction,
+          entry_price: edgeResult.implied_probability,
+          model_probability: edgeResult.model_probability,
+          bet_size_usdc: riskResult.kelly.bet_size_usdc,
+          cluster_key: riskResult.cluster_key,
+          category: market.category,
+          edge: edgeResult.edge,
+          days_to_close: market.days_to_close
+        }).catch(err => console.error('[run] addPosition failed:', err.message))
+
+        const bal = await getBalance(address || 'default').catch(() => currentBalance)
+        const newBal = Math.max(0, bal - riskResult.kelly.bet_size_usdc)
+        await setBalance(address || 'default', newBal).catch(() => {})
+        recordExecution(address, riskResult.kelly.bet_size_usdc, riskResult.direction).catch(() => {})
+
+        console.log('[run] EXECUTED! Direction:', riskResult.direction, '| $' + riskResult.kelly.bet_size_usdc + ' | Balance: $' + newBal)
+
+      } catch (marketErr) {
+        console.error('[run] Market error:', marketErr.message)
+        continue
+      }
+    }
+
+    console.log('[run] ========= AGENT DONE =========')
+  } catch (err) {
+    console.error('[run] Fatal:', err.message)
+    console.error(err.stack)
+  } finally {
+    agentRunning[address] = false
+  }
+}
+
 // GET /api/health
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() })
@@ -192,136 +307,20 @@ app.get('/api/run/status', (req, res) => {
 })
 
 // POST /api/run
-app.post('/api/run', async (req, res) => {
+app.post('/api/run', (req, res) => {
   const { address } = req.body
 
   if (agentRunning[address]) {
     return res.json({ message: 'Agent already running', running: true })
   }
 
-  res.json({ message: 'Agent started', running: true })
   agentRunning[address] = true
+  res.json({ message: 'Agent started', running: true })
 
-  setImmediate(async () => {
-    try {
-      // Safe fallbacks if MongoDB is slow
-      const portfolioValue = await getBalance(address || 'default').catch(() => 1000)
-      const existingPositions = await getOpenPositions(address).catch(() => [])
-      const markets = await fetchMarkets()
-
-      if (!markets || markets.length === 0) {
-        console.log('[run] No markets fetched — aborting')
-        agentRunning[address] = false
-        return
-      }
-
-      // Build diverse sample — max 3 per category
-      const categoryBuckets = {}
-      for (const market of markets) {
-        const cat = market.category || 'Other'
-        if (!categoryBuckets[cat]) categoryBuckets[cat] = []
-        if (categoryBuckets[cat].length < 3) categoryBuckets[cat].push(market)
-      }
-      const diverseMarkets = Object.values(categoryBuckets).flat().slice(0, 20)
-
-      console.log('[run] Starting agent for', address)
-      console.log('[run] Portfolio: $' + portfolioValue)
-      console.log('[run] Categories:', [...new Set(diverseMarkets.map(m => m.category))].join(', '))
-      console.log('[run] Markets to process:', diverseMarkets.length)
-
-      for (const market of diverseMarkets) {
-        try {
-          // Skip if already have open position on this market
-          const alreadyOpen = await hasOpenPosition(address, market.market_id).catch(() => false)
-          if (alreadyOpen) {
-            console.log('[run] Already have position on:', market.question.slice(0, 40))
-            continue
-          }
-
-          const articles = await fetchNewsForMarket(market)
-
-          if (articles.length === 0) {
-            const rec = await skipOrder(market, 'NO_ARTICLES', null, null)
-            rec.wallet_address = address
-            await logTrace(rec, [], { score: 0, signal_count: 0 }, null, null)
-            continue
-          }
-
-          const signals = await extractSignalsForMarket(market, articles)
-          const scoreResult = computeScore(signals)
-
-          console.log('[run]', market.question.slice(0, 40))
-          console.log('[run] Score:', scoreResult.score, '| Signals:', scoreResult.signal_count, '| Sentiment:', scoreResult.dominant_sentiment)
-
-          const edgeResult = calculateEdge(market, scoreResult, [])
-
-          console.log('[run] Action:', edgeResult.action, '| Edge:', edgeResult.edge, '| Adjusted:', edgeResult.adjusted_edge, '| Threshold:', edgeResult.threshold)
-
-          if (edgeResult.action === 'SKIP') {
-            const rec = await skipOrder(market, edgeResult.reason, scoreResult, edgeResult)
-            rec.wallet_address = address
-            await logTrace(rec, signals, scoreResult, edgeResult, null)
-            recordSkip(address, edgeResult.reason).catch(() => {})
-            continue
-          }
-
-          const currentBalance = await getBalance(address || 'default').catch(() => portfolioValue)
-          const openPos = await getOpenPositions(address).catch(() => existingPositions)
-          const riskResult = checkRisk(market, edgeResult, openPos, currentBalance)
-
-          console.log('[run] Risk:', riskResult.action, '| Direction:', riskResult.direction, '| Bet: $' + riskResult.kelly.bet_size_usdc)
-
-          if (riskResult.action === 'SKIP') {
-            const rec = await skipOrder(market, riskResult.reason, scoreResult, edgeResult)
-            rec.wallet_address = address
-            await logTrace(rec, signals, scoreResult, edgeResult, riskResult)
-            recordSkip(address, riskResult.reason).catch(() => {})
-            continue
-          }
-
-          const rec = await executeOrder(market, edgeResult, riskResult)
-          rec.wallet_address = address
-          await logTrace(rec, signals, scoreResult, edgeResult, riskResult)
-
-          // Save position to MongoDB
-          await addPosition({
-            wallet_address: address,
-            market_id: market.market_id,
-            question: market.question,
-            direction: riskResult.direction,
-            entry_price: edgeResult.implied_probability,
-            model_probability: edgeResult.model_probability,
-            bet_size_usdc: riskResult.kelly.bet_size_usdc,
-            cluster_key: riskResult.cluster_key,
-            category: market.category,
-            edge: edgeResult.edge,
-            days_to_close: market.days_to_close
-          }).catch(err => console.error('[run] addPosition failed:', err.message))
-
-          // Deduct from balance
-          const bal = await getBalance(address || 'default').catch(() => currentBalance)
-          const newBal = Math.max(0, bal - riskResult.kelly.bet_size_usdc)
-          await setBalance(address || 'default', newBal).catch(() => {})
-
-          recordExecution(address, riskResult.kelly.bet_size_usdc, riskResult.direction).catch(() => {})
-
-          console.log('[run] EXECUTED:', market.question.slice(0, 40))
-          console.log('[run] Direction:', riskResult.direction, '| $' + riskResult.kelly.bet_size_usdc + ' | New balance: $' + newBal)
-
-        } catch (marketErr) {
-          console.error('[run] Market error:', marketErr.message)
-          continue
-        }
-      }
-
-      console.log('[run] Agent finished for:', address)
-
-    } catch (err) {
-      console.error('[run] Fatal error:', err.message)
-      console.error(err.stack)
-    } finally {
-      agentRunning[address] = false
-    }
+  // Fire and forget — don't await
+  runAgentForWallet(address).catch(err => {
+    console.error('[run] Unhandled error:', err.message)
+    agentRunning[address] = false
   })
 })
 
