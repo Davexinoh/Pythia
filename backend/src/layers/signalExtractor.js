@@ -14,16 +14,15 @@ The JSON must have exactly these fields:
 - signal_type: one of ["regulatory", "liquidity", "media_amplification", "event_proximity"]
 - sentiment: one of ["YES", "NO", "NEUTRAL"]
 - entity: the main entity involved as a lowercase string
-- event_type: a short lowercase description (e.g. "product_release", "policy_decision")
-- freshness_hours: copy the published_hours_ago value from the article metadata
+- event_type: a short lowercase description
+- freshness_hours: copy the published_hours_ago value
 
-Signal type definitions:
-- regulatory: government, legal, or institutional decisions
-- liquidity: market movement, trading, financial indicators
-- media_amplification: viral/high-coverage news
-- event_proximity: news directly about the event the market resolves on
+CRITICAL sentiment rules:
+- YES: article provides STRONG evidence the market resolves YES. Only use if clearly positive.
+- NO: article provides STRONG evidence the market resolves NO. Use when news is negative or contradicts YES outcome.
+- NEUTRAL: article is related but does not clearly support YES or NO. DEFAULT to this when uncertain.
 
-Sentiment: YES increases probability of YES resolution, NO decreases it, NEUTRAL is tangential`
+Most articles should be NEUTRAL. Only use YES or NO when the evidence is unmistakable.`
 
 async function groqWithRetry(payload, retries = 3) {
   for (let attempt = 0; attempt < retries; attempt++) {
