@@ -1,32 +1,26 @@
 const SENSITIVITY = 1.2
-const BASE_EDGE_THRESHOLD = 0.06
+const BASE_EDGE_THRESHOLD = 0.05
 const MIN_UNCERTAINTY_FACTOR = 1.0
 
 function logOddsShift(impliedProbability, score) {
   if (impliedProbability <= 0 || impliedProbability >= 1) return null
-
   const logOddsMarket = Math.log(impliedProbability / (1 - impliedProbability))
   const logOddsModel = logOddsMarket + (score * SENSITIVITY)
   const modelProbability = 1 / (1 + Math.exp(-logOddsModel))
-
   return { logOddsMarket, logOddsModel, modelProbability }
 }
 
 function computeUncertaintyFactor(liquidity) {
-  const liquidityFactor = Math.min(liquidity / 50000, 1.0)
-  const uncertaintyFactor = Math.max(MIN_UNCERTAINTY_FACTOR, 1 + (1 - liquidityFactor))
-  return parseFloat(uncertaintyFactor.toFixed(4))
+  const liquidityFactor = Math.min(liquidity / 100000, 1.0)
+  return Math.max(MIN_UNCERTAINTY_FACTOR, 1 + (1 - liquidityFactor))
 }
 
 function computeDynamicThreshold(errorLog) {
   if (!errorLog || errorLog.length < 5) return BASE_EDGE_THRESHOLD
-
   const mean = errorLog.reduce((a, b) => a + b, 0) / errorLog.length
   const variance = errorLog.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / errorLog.length
   const std = Math.sqrt(variance)
-
-  const dynamic = mean + std
-  return parseFloat(Math.max(BASE_EDGE_THRESHOLD, Math.min(dynamic, 0.20)).toFixed(4))
+  return parseFloat(Math.max(BASE_EDGE_THRESHOLD, Math.min(mean + std, 0.20)).toFixed(4))
 }
 
 function calculateEdge(market, scoreResult, errorLog) {
@@ -41,7 +35,8 @@ function calculateEdge(market, scoreResult, errorLog) {
       model_probability: null,
       edge: null,
       adjusted_edge: null,
-      threshold: null
+      threshold: null,
+      direction: null
     }
   }
 
@@ -54,19 +49,23 @@ function calculateEdge(market, scoreResult, errorLog) {
       model_probability: null,
       edge: null,
       adjusted_edge: null,
-      threshold: null
+      threshold: null,
+      direction: null
     }
   }
 
   const { modelProbability } = shifted
   const edge = modelProbability - implied_probability
-  const uncertaintyFactor = computeUncertaintyFactor(liquidity)
+  const uncertaintyFactor = computeUncertaintyFactor(liquidity || 10000)
   const adjustedEdge = edge / uncertaintyFactor
   const threshold = computeDynamicThreshold(errorLog)
+  const absEdge = Math.abs(adjustedEdge)
 
-  const action = Math.abs(adjustedEdge) >= threshold ? 'PROCEED' : 'SKIP'
-  const reason = action === 'SKIP' ? 'EDGE_BELOW_THRESHOLD' : 'EDGE_SUFFICIENT'
+  // Direction — YES if model thinks prob should be higher, NO if lower
   const direction = edge > 0 ? 'YES' : 'NO'
+
+  const action = absEdge >= threshold ? 'PROCEED' : 'SKIP'
+  const reason = action === 'SKIP' ? 'EDGE_BELOW_THRESHOLD' : 'EDGE_SUFFICIENT'
 
   return {
     action,
