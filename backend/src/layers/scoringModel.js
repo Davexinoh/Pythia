@@ -25,7 +25,7 @@ function freshnessDecay(freshness_hours, signal_type) {
 
 function computeScore(signals) {
   if (!signals || signals.length === 0) {
-    return { score: 0, breakdown: [], signal_count: 0 }
+    return { score: 0, breakdown: [], signal_count: 0, dominant_sentiment: 'NEUTRAL' }
   }
 
   let weightedSum = 0
@@ -53,6 +53,7 @@ function computeScore(signals) {
     })
   }
 
+  // Normalize to [-1, +1] — don't clamp at max
   const rawScore = totalWeight > 0 ? weightedSum / totalWeight : 0
   const score = Math.max(-1, Math.min(1, rawScore))
 
@@ -60,26 +61,19 @@ function computeScore(signals) {
     score: parseFloat(score.toFixed(4)),
     breakdown,
     signal_count: signals.length,
-    dominant_sentiment: score > 0.1 ? 'YES' : score < -0.1 ? 'NO' : 'NEUTRAL'
+    dominant_sentiment: score > 0.05 ? 'YES' : score < -0.05 ? 'NO' : 'NEUTRAL'
   }
 }
 
 function trackDistribution(signal_type, score, distributionLog) {
-  if (!distributionLog[signal_type]) {
-    distributionLog[signal_type] = []
-  }
-
+  if (!distributionLog[signal_type]) distributionLog[signal_type] = []
   const log = distributionLog[signal_type]
   log.push(score)
   if (log.length > 100) log.shift()
-
   if (log.length < 5) return null
-
   const mean = log.reduce((a, b) => a + b, 0) / log.length
   const variance = log.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / log.length
-
-  const driftWarning = Math.abs(mean) > 0.6 || variance > 0.3
-  return { signal_type, mean: parseFloat(mean.toFixed(4)), variance: parseFloat(variance.toFixed(4)), driftWarning }
+  return { signal_type, mean: parseFloat(mean.toFixed(4)), variance: parseFloat(variance.toFixed(4)) }
 }
 
 module.exports = { computeScore, trackDistribution }
