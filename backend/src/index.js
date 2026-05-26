@@ -44,9 +44,9 @@ async function runAgentForWallet(address) {
     for (const market of markets) {
       const cat = market.category || 'Other'
       if (!categoryBuckets[cat]) categoryBuckets[cat] = []
-      if (categoryBuckets[cat].length < 3) categoryBuckets[cat].push(market)
+      if (categoryBuckets[cat].length < 5) categoryBuckets[cat].push(market)
     }
-    const diverseMarkets = Object.values(categoryBuckets).flat().slice(0, 20)
+    const diverseMarkets = Object.values(categoryBuckets).flat().slice(0, 30)
     console.log('[run] Categories:', [...new Set(diverseMarkets.map(m => m.category))].join(', '))
     console.log('[run] Processing:', diverseMarkets.length, 'markets')
 
