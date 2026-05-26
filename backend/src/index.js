@@ -38,16 +38,22 @@ async function runAgentForWallet(address) {
       console.log('[run] No markets — aborting')
       return
     }
+// Priority categories first
+const PRIORITY_CATEGORIES = ['Bitcoin', 'Ethereum', 'Solana', 'Crypto', 'Politics', 'Macro', 'Tech', 'Sports', 'Pop Culture', 'Other']
+const categoryBuckets = {}
 
-    // Build diverse sample
-    const categoryBuckets = {}
-    for (const market of markets) {
-      const cat = market.category || 'Other'
-      if (!categoryBuckets[cat]) categoryBuckets[cat] = []
-      if (categoryBuckets[cat].length < 5) categoryBuckets[cat].push(market)
-    }
-    const diverseMarkets = Object.values(categoryBuckets).flat().slice(0, 30)
-    console.log('[run] Categories:', [...new Set(diverseMarkets.map(m => m.category))].join(', '))
+for (const cat of PRIORITY_CATEGORIES) {
+  categoryBuckets[cat] = []
+}
+
+for (const market of markets) {
+  const cat = market.category || 'Other'
+  if (!categoryBuckets[cat]) categoryBuckets[cat] = []
+  if (categoryBuckets[cat].length < 4) categoryBuckets[cat].push(market)
+}
+
+const diverseMarkets = Object.values(categoryBuckets).flat().slice(0, 30)
+        console.log('[run] Categories:', [...new Set(diverseMarkets.map(m => m.category))].join(', '))
     console.log('[run] Processing:', diverseMarkets.length, 'markets')
 
     for (const market of diverseMarkets) {
